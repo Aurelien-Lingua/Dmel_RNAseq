@@ -1,5 +1,6 @@
 .Rproj.user
 *.pdf
+*.html
 *.rds
 !t2g_dmel.rds
 public-key.asc
