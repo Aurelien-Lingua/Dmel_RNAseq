@@ -1,0 +1,205 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+### ENTER ROOT DIR PATH BELOW, or keep the renv/project rootdir
+rootdir <- getwd()
+Robjectsdir <- paste0(rootdir, "/Robjects")
+Graphsdir <- paste0(rootdir, "/graphs")
+BVdir <- paste0(Graphsdir, "/BioVar")
+
+
+### ENTER PATH WITH KALLISTO FOLDERS BELOW
+datapath <- paste0(rootdir, "/input")
+
+# sample names for all samples
+sample_list <- dir(file.path(datapath))
+# paths to each kallisto folder for each processed sample
+kal_dirs <- file.path(datapath, sample_list)
+
+#setting root directory
+knitr::opts_knit$set(root.dir = rootdir)
+# options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = F, dplyr.summarise.inform = F) # avoid truncated output in R console and scientific notation
+# Set seed to ensure reproducibility in any function sthat require randomness
+set.seed(123456)
+suppressMessages({
+  library(edgeR)    # for DGE analysis
+  library(pheatmap) # for heatmap graphs
+  library(dplyr)    # for useful modification functions of dataframes, lists, etc
+  library(data.table)      # to reorder the t2ged matrix
+  library(clusterProfiler) # ORA/GSEA
+  library(org.Dm.eg.db)    # Dmel db for GO terms/Kegg pathways
+  library(DOSE)            # for some graphing functions (facet_grid)
+  library(enrichplot)      # Graphing functions (pairwise_termsim)
+  library(ggplot2)  # graphing module
+  library(pathview) # to produce pathview plots of KEGG pathways with enriched genes/transcripts 
+  library(cowplot)
+  #library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
+  library(RColorBrewer) # for a colourful plot
+  library(ggrepel) # for nice annotations
+  library(cluster)         # for PAM clustering function
+  library(factoextra)      # for the various graphing methods in finding optimal k number
+  library(openxlsx) # to save enrichment analysis results
+  library(forcats) # to reverse order of factor for avglogCPM function
+  library(tximport)
+})
+```
+
+```{r loading relevant values}
+if (!exists("y")){
+  y <- readRDS(file = paste0(Robjectsdir, "/y_gene.rds"))
+}
+if (!exists("fit")){
+  fit <- readRDS(file = paste0(Robjectsdir, "/fit.rds"))
+}
+if (!exists("s2c")){
+  s2c <- readRDS(file = paste0(Robjectsdir, "/s2c.rds"))
+  design <- s2c$design
+}
+if (!exists("t2g")){
+  t2g <- readRDS(file = paste0(Robjectsdir, "/t2g_dmel.rds"))
+}
+if (!exists("t2g")){
+  t2g <- readRDS(file = paste0(Robjectsdir, "/t2g_dmel.rds"))
+}
+if (!exists("logCPM")){
+  logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
+}
+
+
+
+
+```
+
+
+
+### Creating Contrast matrix containing all required contrasts to do DGE on
+
+```{r Building contrasts matrix}
+#####
+#> To change:
+#> - modify the contrasts matrix with all contrasts to potentially explore.
+#> This section is very important as you are building the totality of contrasts to explore differential expression in. The contrasts matrix is later used for differential expression analysis, enrichment analysis, and to loop through other functions, as well as to label filenames and graphs with the contrast their data belongs to. 
+#>
+#####
+#Building into one matrix for ease of use
+contrasts <- makeContrasts(
+  # Intra-host infection and injection contrasts
+  WT_Inf_6h = W1118.U112.6h-W1118.PBS.6h,
+  WT_Inf_48h = W1118.U112.48h-W1118.PBS.48h,
+  WT_PBS_6h = W1118.PBS.6h-W1118.Unin.6h,
+  WT_PBS_48h = W1118.PBS.48h-W1118.Unin.48h,
+  IMD_Inf_6h = IMD.U112.6h-IMD.PBS.6h,
+  IMD_Inf_48h = IMD.U112.48h-IMD.PBS.48h,
+  IMD_PBS_6h = IMD.PBS.6h-IMD.Unin.6h,
+  IMD_PBS_48h = IMD.PBS.48h-IMD.Unin.48h,
+  # intra-host inf vs uninf
+  WT_Inf_6h_nopbs = W1118.U112.6h-W1118.Unin.6h,
+  WT_Inf_48h_nopbs = W1118.U112.48h-W1118.Unin.48h,
+  IMD_Inf_6h_nopbs = IMD.U112.6h-IMD.Unin.6h,
+  IMD_Inf_48h_nopbs = IMD.U112.48h-IMD.Unin.48h,
+  
+  # Inter-host infection and injection contrasts
+  Inf_IMDvsWT_48h = (IMD.U112.48h-IMD.PBS.48h)-(W1118.U112.48h-W1118.PBS.48h),
+  Inf_IMDvsWT_6h = (IMD.U112.6h-IMD.PBS.6h)-(W1118.U112.6h-W1118.PBS.6h),
+  PBS_IMDvsWT_48h = (IMD.PBS.48h-IMD.Unin.48h)-(W1118.PBS.48h-W1118.Unin.48h),
+  PBS_IMDvsWT_6h = (IMD.PBS.6h-IMD.Unin.6h)-(W1118.PBS.6h-W1118.Unin.6h),
+  # time-independent intra-host contrasts
+  # IMD_inf =
+  # uninfected contrasts
+  Uninf_IMDvsWT_6h = IMD.Unin.6h-W1118.Unin.6h,
+  Uninf_IMDvsWT_48h = IMD.Unin.48h-W1118.Unin.48h,
+  IMD_Uninf = IMD.Unin.48h-IMD.Unin.6h,
+  WT_Uninf = W1118.Unin.48h-W1118.Unin.6h,
+  # Time contrasts. Negative LFC means expression goes down over time, positive means it goes up
+  WT_Inf = W1118.U112.48h-W1118.U112.6h,
+  WT_PBS = W1118.PBS.48h-W1118.PBS.6h,
+  IMD_Inf = IMD.U112.48h-IMD.U112.6h,
+  IMD_PBS = IMD.PBS.48h-IMD.PBS.6h,
+levels=s2c$group)
+
+saveRDS(contrasts, file = paste0(Robjectsdir, "/contrasts.rds"))
+```
+
+### Running DGE analysis, producing relevant graphs, and saving data to Robject file
+Differential Expression testing
+
+Using glmTreat function to perform Differential expression testing with a log-fold change cutoff of 1.5. With input being a DGEGLM object from glmQLFit(), the testing method used is the same as that used in glmQLFTest, that is a quasi-likelihood F-test, but with the null hypothesis tested as the absolute value of the logFC of each transcript being equal to or below 1.5.
+
+```{r DE testing}
+#####
+#> To change:
+#> - After getting the final number of DE transcripts for each contrast, determine if a significance cut-off is desired. 
+#> Remember that any cut-off will bias the resulting significantly DE transcripts for transcripts with potentially low overall expression but relatively high differences in expression in the contrast. Transcripts with higher average expression will need larger increase/decrease in absolute expression values in the contrast to pass the filter, which can hide DE transcripts of genes that are usually highly expressed. But also, getting very large number of DE transcripts (in proportion to total number of transcripts in genome/counts) does inform the need for a cut-off.
+#>
+#####
+
+# takes as input the DGEGLM object fit previously made when calling glmQLFit. Default FDR is at 5%. Using glmTreat to allow for log-fold-cutoff to focus on more biologically relevant transcripts with higher fold-change in the tested contrast
+Treat_res <- list()
+for (i in 1:dim(contrasts)[2]){
+  Treat_res[[colnames(contrasts)[i]]] <- glmTreat(fit, contrast = contrasts[,i], lfc = log2(1.2))
+}
+
+# same method without log-fold cutoff:
+glmQL_res <- list()
+for (i in 1:dim(contrasts)[2]){
+  glmQL_res[[colnames(contrasts)[i]]] <- glmQLFTest(fit, contrast = contrasts[,i])
+}
+# tximport method labels gene ID column names differently to catch kallisto. this changes them to be identical for ease of use when coding
+if (!is.null(glmQL_res[[1]]$genes$TranscriptID)){
+  for (i in 1:length(glmQL_res)){
+    colnames(glmQL_res[[i]]$genes)[colnames(glmQL_res[[i]]$genes) == 'TranscriptID'] <- 'target_id'
+    colnames(glmQL_res[[i]]$genes)[colnames(glmQL_res[[i]]$genes) == 'flybaseID'] <- 'ens_gene'
+    colnames(glmQL_res[[i]]$genes)[colnames(glmQL_res[[i]]$genes) == 'ENTREZID'] <- 'entrez_gene'
+    colnames(glmQL_decided[[i]]$table)[colnames(glmQL_decided[[i]]$table) == 'TranscriptID'] <- 'target_id'
+    colnames(glmQL_decided[[i]]$table)[colnames(glmQL_decided[[i]]$table) == 'flybaseID'] <- 'ens_gene'
+    colnames(glmQL_decided[[i]]$table)[colnames(glmQL_decided[[i]]$table) == 'ENTREZID'] <- 'entrez_gene'
+  }
+}
+
+saveRDS(glmQL_res, file = paste0(Robjectsdir, "/glmQL_res_txi.rds"))
+saveRDS(Treat_res, file = paste0(Robjectsdir, "/Treat_res_txi.rds"))
+
+```
+From above DE testing, number of significantly up/downregulated transcripts, and non-significant transcripts. Looking at 48h inter-host infection contrast here:
+
+```{r Outputting number of DE transcripts, include=FALSE}
+glmQL_decided <- list()
+glmQL_decided_numbs <- list()
+
+for (i in 1:length(glmQL_res)){
+  # multiple testing verification to classify trasncripts as significantly upregulated/downregulated or nonsignificant.
+  glmQL_decided_numbs[[names(glmQL_res)[i]]] <- decideTests(glmQL_res[[i]])
+  glmQL_decided[[names(glmQL_res)[i]]] <-  topTags(glmQL_res[[i]], n= nrow(glmQL_res[[i]]))
+}
+
+Treat_decided <- list()
+Treat_decided_numbs <- list()
+
+for (i in 1:length(Treat_res)){
+  Treat_decided_numbs[[names(Treat_res)[i]]] <- decideTests(Treat_res[[i]])
+  Treat_decided[[names(Treat_res)[i]]] <- topTags(Treat_res[[i]], n= nrow(Treat_res[[i]]))
+}
+saveRDS(glmQL_decided, file = paste0(Robjectsdir, "/glmQL_decided_txi.rds"))
+saveRDS(Treat_decided, file = paste0(Robjectsdir, "/Treat_decided_txi.rds"))
+
+
+```
+
+```{r summaries}
+DGEs <- list()
+for (i in 1:length(glmQL_decided)){
+  DGEs[[names(glmQL_res)[i]]] <- summary(glmQL_decided_numbs[[names(glmQL_res)[i]]])
+}
+DGEs_Treat <- list()
+for (i in 1:length(Treat_decided)){
+  DGEs_Treat[[names(Treat_decided)[i]]] <- summary(Treat_decided_numbs[[names(Treat_decided)[i]]])
+}
+DGEs
+DGEs_Treat
+```
+
+
+

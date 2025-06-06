@@ -1,0 +1,482 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+### ENTER ROOT DIR PATH BELOW, or keep the renv/project rootdir
+rootdir <- getwd()
+Robjectsdir <- paste0(rootdir, "/Robjects")
+Graphsdir <- paste0(rootdir, "/graphs")
+# make ORA graph folder
+
+
+
+### ENTER PATH WITH KALLISTO FOLDERS BELOW
+datapath <- paste0(rootdir, "/input")
+
+# sample names for all samples
+sample_list <- dir(file.path(datapath))
+# paths to each kallisto folder for each processed sample
+kal_dirs <- file.path(datapath, sample_list)
+
+#setting root directory
+knitr::opts_knit$set(root.dir = rootdir)
+# options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = F, dplyr.summarise.inform = F) # avoid truncated output in R console and scientific notation
+# Set seed to ensure reproducibility in any function sthat require randomness
+set.seed(123456)
+suppressMessages({
+  library(edgeR)    # for DGE analysis
+  library(pheatmap) # for heatmap graphs
+  library(dplyr)    # for useful modification functions of dataframes, lists, etc
+  library(data.table)      # to reorder the t2ged matrix
+  library(clusterProfiler) # ORA/GSEA
+  library(org.Dm.eg.db)    # Dmel db for GO terms/Kegg pathways
+  library(DOSE)            # for some graphing functions (facet_grid)
+  library(enrichplot)      # Graphing functions (pairwise_termsim)
+  library(ggplot2)  # graphing module
+  library(pathview) # to produce pathview plots of KEGG pathways with enriched genes/transcripts 
+  library(cowplot)
+  #library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
+  library(RColorBrewer) # for a colourful plot
+  library(ggrepel) # for nice annotations
+  library(cluster)         # for PAM clustering function
+  library(factoextra)      # for the various graphing methods in finding optimal k number
+  library(openxlsx) # to save enrichment analysis results
+  library(forcats) # to reverse order of factor for avglogCPM function
+  library(tximport)
+})
+```
+
+```{r loading relevant values}
+if (!exists("t2g")){
+  t2g <- readRDS(file = paste0(Robjectsdir, "/t2g_dmel.rds"))
+}
+if (!exists("y")){
+  y <- readRDS(file = paste0(Robjectsdir, "/y_gene.rds"))
+  if (dim(y$counts)[1]<20000){
+    flygenes <- rownames(y$counts)
+    t2ged <- t2g[t2g$ens_gene %in% flygenes & !duplicated(t2g$ens_gene),]
+    # Creating annotation dataframe to be entered in DGEList y
+    # Turning t2ged into data.table object
+    t2ged <- as.data.table(t2ged)
+    # reordering t2ged by same order as kallisto counts object through transcript col
+    t2ged<-t2ged[order(factor(t2ged$ens_gene,levels = flygenes))]
+  }else{
+    transcripts <- rownames(y$counts)
+    t2ged <- t2g[t2g$target_id %in% transcripts & !duplicated(t2g$target_id),]
+    #Warning: this removes duplicates, i.e. only gives one row of IDs for each transcript (2248 transcripts duplicates exist where they map to multiple gene IDs).
+    #!!! INCREDIBLY IMPORTANT PART => REORDER t2ged IN THE SAME ORDER AS THE COUNTS MATRIX, SO TRANSCRIPTS ARE LINKED TO THE CORRECT GENE IDS
+    # Turning t2ged into data.table object
+    t2ged <- as.data.table(t2ged)
+    # reordering t2ged by same order as kallisto counts object through transcript col
+    t2ged<-t2ged[order(factor(t2ged$target_id,levels = rownames(cts.scaled)))]
+  }
+}
+if (!exists("fit")){
+  fit <- readRDS(file = paste0(Robjectsdir, "/fit.rds"))
+}
+if (!exists("s2c")){
+  s2c <- readRDS(file = paste0(Robjectsdir, "/s2c.rds"))
+  design <- s2c$design
+}
+if (!exists("logCPM")){
+  logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
+}
+if (!exists("glmQL_res")){
+  glmQL_res <- readRDS(file = paste0(Robjectsdir, "/glmQL_res_txi.rds"))
+  glmQL_decided <- readRDS(file = paste0(Robjectsdir, "/glmQL_decided_txi.rds"))
+  Treat_res <- readRDS(file = paste0(Robjectsdir, "/Treat_res_txi.rds"))
+  Treat_decided <- readRDS(file = paste0(Robjectsdir, "/Treat_decided_txi.rds"))
+}
+if (!exists("gsego_res")){
+  gsego_res <- readRDS(file = paste0(Robjectsdir, "/GSEA_results_GO_glmQL-txi.rds"))
+  gsekegg_res <- readRDS(file = paste0(Robjectsdir, "/GSEA_results_K_glmQL-txi.rds"))
+}
+if (!exists("ORA_results_GO")){
+  ORA_results_GO <- readRDS(file = paste0(Robjectsdir, "/ORA_results_GO_glmQL-txi.rds"))
+  ORA_results_K <- readRDS(file = paste0(Robjectsdir, "/ORA_results_K_glmQL-txi.rds"))
+}
+if (!exists("contrasts_list")){
+  contrasts_list <- readRDS(file = paste0(Robjectsdir, "/contrasts.rds"))
+}
+```
+
+
+```{r R setting up functions, warning=FALSE}
+
+.hunt <- function(x = "geneID", contrast){
+  found <- t2ged[t2ged$target_id %in% "empty",]
+  # looping until the entry is found in t2ged
+  while(dim(found)[1]==0){
+    # separating IDs if a list was given
+    if(length(x)==1){
+      if(grepl("/",x)|grepl(" ",x)){
+        try(x <- strsplit(x, "/"))
+        try(x <- strsplit(x, " "))
+        x <- unlist(x)
+      }
+    }
+    if (grepl("FBtr",x[[1]],fixed = TRUE)){
+      found <- t2ged[t2ged$target_id %in% x,]
+    } else if (grepl("FBgn",x[[1]],fixed = TRUE)){
+      found <- t2ged[t2ged$ens_gene %in% x,]
+    } else if (x[[1]] %in% t2ged$entrez_gene){              
+      found <- t2ged[t2ged$entrez_gene %in% x,]
+    } else if (x[[1]] %in% t2ged$ext_gene){
+      found <- t2ged[t2ged$ext_gene %in% x,]
+    } else {
+      cat("Please enter either a gene ID in the form of transcript id (FBtrxx), flybase gene ID (Fbgnxxx), gene symbol (e.g. pug), or entrezID (numbers):")
+      x<- readline()
+    }
+  }
+  # getting contrast values for each gene
+  temp_table <- glmQL_decided[[contrast]]$table[glmQL_decided[[contrast]]$table$target_id %in% found$target_id,]
+  # reordering the table to follow found's order, so values are correctly assigned
+  # temp_table<-temp_table[order(factor(temp_table, levels = found$ens_gene)),]
+  found <- temp_table[!duplicated(temp_table$ens_gene),]
+  return(found)
+}
+
+# function saves the Flybase gene IDs in found object for batch search on flyatlas
+FBgns_save <- function(){
+  label <- paste0(length(found$ens_gene),"_",gsub(":",".",Sys.time()))
+  
+  write.csv(found$ens_gene, 
+            quote = FALSE, 
+            file = paste0("C:/Users/Aurelien/Expansion/proj28/plots/tximport plots/batch_searches/",
+                          label,".csv"))
+  
+}
+# Call function to assign the contrast of interest.
+wcontrast <- function(x = 404){
+  x<-as.integer(x)
+  num_c <- dim(contrasts_list)[2]
+  message <- paste("Please enter a number between 1 to",num_c,"to choose your contrast. Below are the contrast options:\n")
+  for (j in 0:3){  # Iterate over the 4 lines
+    for (i in seq(1 + j, num_c, by = 4)){  # Print contrasts separated by 4
+      message <- paste0(message, i, " - ", names(glmQL_res)[i], "\t")
+    } 
+    message <- paste0(message, "\n")
+  }
+  while ( x > num_c| x < 1| is.na(x)){
+    cat(message)
+    x<- as.integer(readline())
+  }
+  assigned <<- names(glmQL_res)[x]
+  return(assigned)
+}
+# function to use in other functions to return contrasts without assigning contrast globally
+.wcontrast <- function(x = 404){
+  x<-as.integer(x)
+  num_c <- dim(contrasts_list)[2]
+  message <- paste("Please enter a number between 1 to",num_c,"to choose your contrast. Below are the contrast options:\n")
+  for (j in 0:3){  # Iterate over the 4 lines
+    for (i in seq(1 + j, num_c, by = 4)){  # Print contrasts separated by 4
+      message <- paste0(message, i, " - ", colnames(contrasts_list)[i], "\t")
+    }
+    message <- paste0(message, "\n")
+  }
+  while ( x > num_c | x < 1 | is.na(x)){
+    cat(message)
+    x<- as.integer(readline())
+  }
+  assigned <- colnames(contrasts_list)[x]
+  return(assigned)
+}
+# function to get all transcript IDs associated with entered gene ID (ens,ext,entrez)
+.ID_to_trans <- function(x="404"){
+  looking <- t2ged[t2ged$target_id %in% "empty",]
+  # looping until the entry is found in t2ged
+  while(dim(looking)[1]==0){
+    # separating IDs if a list was given
+    if (grepl("/",x)|grepl(" ",x)){
+      try(x <- strsplit(x, "/"))
+      try(x <- strsplit(x, " "))
+      x <- unlist(x)
+    }
+    if (grepl("FBgn",x[[1]],fixed = TRUE)){
+      looking <- t2ged[t2ged$ens_gene %in% x,]
+      
+    } else if (x[[1]] %in% t2ged$entrez_gene){              
+      looking <- t2ged[t2ged$entrez_gene %in% x,]
+      
+    } else if (x[[1]] %in% t2ged$ext_gene){
+      looking <- t2ged[t2ged$ext_gene %in% x,]
+    } else {
+      cat("Please enter gene ID in the form of flybase gene ID (Fbgnxxx), gene symbol (e.g. pug), or entrezID (numbers):")
+      x<- readline()
+    }
+  }
+  return(looking)
+}
+# function to retrieve the average logCPM of a list of input transcripts.
+gavlogCPM <- function(){
+  # retrieving list of transcript IDs with associated gene symbol
+  IDs <- .ID_to_trans()
+  buffer <- readline("buffer. Just press enter if required.")
+  # getting contrast to extract sample groups from
+  contrast <- .wcontrast()
+  # getting sample groups from contrasts matrix
+  sample_groups <- contrasts_list[,contrast]
+  sample_groups <- names(sample_groups[sample_groups!=0])
+  # getting avlogCPM values for the selected transcripts and sample groups
+  # if statement to check if I'm working with transcript-level or gene-level information
+  if (dim(glmQL_decided[[1]])[1]==17215){
+    avlogCPM_vals <- avlogCPM[IDs$ens_gene,sample_groups]
+    # renaming rows to include the gene symbol in them
+    rownames(avlogCPM_vals) <- paste0(IDs$ens_gene," (",IDs$ext_gene,")")
+  }else{
+    avlogCPM_vals <- avlogCPM[IDs$target_id,sample_groups]
+    # renaming rows to include the gene symbol in them
+    rownames(avlogCPM_vals) <- paste0(IDs$target_id," (",IDs$ext_gene,")")
+  }
+  # removing NA rows which come from transcript IDs pulled out of t2ged that did not pass the filtering steps. These transcripts don't exist in y so they don't exist in logCPM
+  avlogCPM_vals <- avlogCPM_vals[!is.na(avlogCPM_vals[,1]),]
+  View(avlogCPM_vals)
+  avlogCPM_vals <<- avlogCPM_vals
+}
+
+# Function finds given gene entries in t2ged, saves the list globally and opens it to view. you can enter one ID or multiple IDs separated by a "/"
+hunt <- function(x = "geneID"){
+  looking <- t2ged[t2ged$target_id %in% "empty",]
+  # looping until the entry is found in t2ged
+  while(dim(looking)[1]==0){
+    # separating IDs if a list was given
+    if(length(x)==1){
+      if(grepl("/",x)|grepl(" ",x)){
+        try(x <- strsplit(x, "/"))
+        try(x <- strsplit(x, " "))
+        x <- unlist(x)
+      }
+    }
+    if (grepl("FBtr",x[[1]],fixed = TRUE)){
+      looking <- t2ged[t2ged$target_id %in% x,]
+      found <<- t2ged[t2ged$target_id %in% x,]
+    } else if (grepl("FBgn",x[[1]],fixed = TRUE)){
+      looking <- t2ged[t2ged$ens_gene %in% x,]
+      found <<- t2ged[t2ged$ens_gene %in% x,]
+    } else if (x[[1]] %in% t2ged$entrez_gene){              
+      looking <- t2ged[t2ged$entrez_gene %in% x,]
+      found <<- t2ged[t2ged$entrez_gene %in% x,]
+    } else if (x[[1]] %in% t2ged$ext_gene){
+      looking <- t2ged[t2ged$ext_gene %in% x,]
+      found <<- t2ged[t2ged$ext_gene %in% x,]
+    } else {
+      cat("Please enter either a gene ID in the form of transcript id (FBtrxx), flybase gene ID (Fbgnxxx), gene symbol (e.g. pug), or entrezID (numbers):")
+      x<- readline()
+    }
+  }
+  
+  # found<<-found[!duplicated(found$ens_gene),]
+  # I want to add to the found object a 5th column with information on its expression in the currently assigned contrast, i.e. logFC and FDR for the contrast
+  # running which contrast function if not already done
+  if (!exists("assigned")){
+    .wcontrast()
+  }
+  # getting contrast values for each gene
+  temp_table <<- glmQL_decided[[assigned]]$table[glmQL_decided[[assigned]]$table$target_id %in% found$target_id,]
+
+  
+  # reordering the table to follow found's order, so values are correctly assigned
+  # temp_table<<-temp_table[order(factor(temp_table, levels = found$ens_gene)),]
+  View(temp_table)
+  # # adding 5th column with logFC value for assigned contrast
+  # found[[paste0("logFC in ",assigned)]] <- temp_table$logFC
+  # # adding 6th column with logCPM for assigned contrast
+  # found[[paste0("logCPM in ",assigned)]] <- temp_table$logCPM
+  # # adding 7th column with FDR for assigned contrast
+  # found[[paste0("FDR in ",assigned)]] <- temp_table$FDR
+  found <<- temp_table[!duplicated(temp_table$ens_gene),]
+  View(found)
+  
+}
+
+.jhunt <- function(x="404", contrast = NULL){
+  # retrieving list of transcript IDs with associated gene symbol
+  if(x=="404"){
+    IDs <- .ID_to_trans()
+  }else{IDs <- .ID_to_trans(x)}
+  # buffer <- readline("buffer. Just press enter if required.")
+  # getting contrast to extract sample groups from
+  contrast <- .wcontrast(contrast)
+  # getting sample groups from contrasts matrix
+  sample_groups <- contrasts_list[,contrast]
+  sample_groups <- names(sample_groups[sample_groups!=0])
+  # getting avlogCPM values for the selected transcripts and sample groups
+  # if statement to check if I'm working with transcript-level or gene-level information
+  if (dim(glmQL_decided[[1]])[1]==17215){
+    avlogCPM_vals <- avlogCPM[IDs$ens_gene,sample_groups]
+  }else{
+    avlogCPM_vals <- avlogCPM[IDs$target_id,sample_groups]
+  }
+  # removing NA rows which come from transcript IDs pulled out of t2ged that did not pass the filtering steps. These transcripts don't exist in y so they don't exist in logCPM
+  avlogCPM_vals <- avlogCPM_vals[!is.na(avlogCPM_vals[,1]),]
+  
+  DGEvals <-.hunt(IDs$ens_gene, contrast = contrast)
+  DGEvals[,6:8] <- list(NULL)
+  newtable <- merge(DGEvals, avlogCPM_vals, by=0)
+  newtable[,1] <- NULL
+  return(newtable)
+}
+
+jhunt <- function(x="404"){
+  # retrieving list of transcript IDs with associated gene symbol
+  if(x=="404"){
+    IDs <- .ID_to_trans()
+  }else{IDs <- .ID_to_trans(x)}
+  buffer <- readline("buffer. Just press enter if required.")
+  # getting contrast to extract sample groups from
+  contrast <- .wcontrast()
+  # getting sample groups from contrasts matrix
+  sample_groups <- contrasts_list[,contrast]
+  sample_groups <- names(sample_groups[sample_groups!=0])
+  # getting avlogCPM values for the selected transcripts and sample groups
+  # if statement to check if I'm working with transcript-level or gene-level information
+  if (dim(glmQL_decided[[1]])[1]==17215){
+    avlogCPM_vals <- avlogCPM[IDs$ens_gene,sample_groups]
+  }else{
+    avlogCPM_vals <- avlogCPM[IDs$target_id,sample_groups]
+  }
+  # removing NA rows which come from transcript IDs pulled out of t2ged that did not pass the filtering steps. These transcripts don't exist in y so they don't exist in logCPM
+  avlogCPM_vals <- avlogCPM_vals[!is.na(avlogCPM_vals[,1]),]
+  
+  DGEvals <-.hunt(IDs$ens_gene, contrast = contrast)
+  DGEvals[,6:8] <- list(NULL)
+  newtable <- merge(DGEvals, avlogCPM_vals, by=0)
+  newtable[,1] <- NULL
+  View(newtable)
+}
+```
+
+```{r fixing KEGG pathway names}
+
+# below code removes the "- Drosophila Melanogaster (fruit fly)" qualifier from each pathway description
+for (contrast in 1:length(ORA_results_K)){
+  k <- ORA_results_K[[contrast]]
+  descr <- k@result$Description
+  descr <- strsplit(descr, " - Dros")
+  descr <- lapply(descr, function(x){
+    x[1]
+  })
+  descr <- unlist(descr)
+  k@result$Description <- descr
+  ORA_results_K[[contrast]] <- k
+}
+
+for (contrast in 1:length(gsekegg_res)){
+  k <- gsekegg_res[[contrast]]
+  descr <- k@result$Description
+  descr <- strsplit(descr, " - Dros")
+  descr <- lapply(descr, function(x){
+    x[1]
+  })
+  descr <- unlist(descr)
+  k@result$Description <- descr
+  gsekegg_res[[contrast]] <- k
+}
+```
+
+# Dotplots 
+```{r Dotplot loops, include=FALSE}
+
+
+Dotplotdir <- paste0(Graphsdir, "/Dotplots")
+for (i in 1:length(ORA_results_GO)){
+  name <- names(ORA_results_GO)[i]
+  # Producing dotplot for ORAGO terms
+  dotplot(ORA_results_GO[[name]], showCategory=25, font.size = 9, title=paste0("Enriched GO terms - ",name), label_format = 200)
+  try(ggsave(filename = paste0(Dotplotdir,"/dplot_ORAGO_",name,".pdf"),height = 8, width = 8))
+  # Producing dotplot for ORAK pathways
+  dotplot(ORA_results_K[[name]], showCategory=25, font.size = 9, title=paste0("Enriched KEGG pathways - ",name), label_format = 200)
+  try(ggsave(filename = paste0(Dotplotdir,"/dplot_ORAK_",name,".pdf"),height = 8, width = 8))
+  #producing dotplot for GSEAGO terms
+  try(dotplot(gsego_res[[name]], 
+              showCategory=30, 
+              split=".sign", 
+              font.size = 10, 
+              title=paste0("Enriched GO terms - ",name), 
+              label_format = 200) 
+      + facet_grid(.~.sign))
+  try(ggsave(filename = paste0(Dotplotdir,"/dplot_GSEGO_",name,".pdf"),height = 8, width = 9))
+  try(dotplot(gsekegg_res[[name]], 
+              showCategory=30, 
+              split=".sign", 
+              font.size = 9, 
+              title=paste0("Enriched KEGG pathways - ",name), 
+              label_format = 200) 
+       + facet_grid(.~.sign))
+  try(ggsave(filename = paste0(Dotplotdir,"/dplot_GSEK_",name,".pdf"),height = 8, width = 7))
+}
+
+
+```
+
+
+```{r Dotplot assigned, include=FALSE}
+#####
+#> Change
+#> - modify list to choose which dataset to plot from, and edit title and filename if saving.
+#> - use wcontrast function first to assign contrast
+#####
+
+wcontrast()
+dotplot(ORA_results_GO[[assigned]], showCategory=25, font.size = 9, title=paste0("Enriched GO terms - ",name), label_format = 200)
+  # try(ggsave(filename = paste0(Dotplotdir,"/ORAGO_",name,".pdf"),height = 8, width = 8))
+
+
+```
+
+# Treeplots
+```{r}
+
+ORA_GO_pair = list()
+ORA_K_pair = list()
+gsea_GO_pair = list()
+gsea_K_pair = list()
+Treeplotdir <- paste0(Graphsdir,"/Treeplots")
+for (i in 1:length(ORA_results_GO)){
+  name <- names(ORA_results_GO)[i]
+  ORA_GO_pair[[name]] <- pairwise_termsim(ORA_results_GO[[name]]) # calculating pairwise similarities of enriched GO terms
+  gsea_GO_pair[[name]] <- try(pairwise_termsim(gsego_res[[name]]), outFile = stdout()) # calculating pairwise similarities of enriched GO terms
+  # as some KEGG contrasts have minimal to no sig pathways, pair making sometimes fails
+  try(ORA_K_pair[[name]] <- pairwise_termsim(ORA_results_K[[name]]), outFile = stdout()) # calculating pairwise similarities of enriched kegg pathways
+  # as some KEGG contrasts have minimal to no sig pathways, pair making sometimes fails
+  try(gsea_K_pair[[name]] <- pairwise_termsim(gsekegg_res[[name]]), outFile = stdout()) # calculating pairwise similarities of enriched kegg pathways
+  treeplot(x = ORA_GO_pair[[name]], 
+           offset.params = list( bar_tree = rel(1.5),
+                                 tiplab = rel(1),
+                                 hexpand = 0.1), 
+           cluster.params = list(n = 6,
+                                 label_words_n = 0 ))
+  ggsave(filename = paste0(Treeplotdir,"/treep_ORAGO_",name,".pdf"),width = 8,height = 7)
+  try(treeplot(x = ORA_K_pair[[name]], 
+           offset.params = list( bar_tree = rel(1.5),
+                                 tiplab = rel(1),
+                                 hexpand = 0.1), 
+           cluster.params = list(n = 6,
+                                 label_words_n = 0 )))
+  ggsave(filename = paste0(Treeplotdir,"/treep_ORAK_",name,".pdf"),width = 8,height = 7)
+  try(treeplot(x = gsea_GO_pair[[name]], 
+           offset.params = list( bar_tree = rel(1.5),
+                                 tiplab = rel(1),
+                                 hexpand = 0.1), 
+           cluster.params = list(n = 6,
+                                 label_words_n = 0 )))
+  ggsave(filename = paste0(Treeplotdir,"/treep_GSEGO_",name,".pdf"),width = 8,height = 7)
+  try(treeplot(x = gsea_K_pair[[name]], 
+           offset.params = list( bar_tree = rel(1.5),
+                                 tiplab = rel(1),
+                                 hexpand = 0.1), 
+           cluster.params = list(n = 6,
+                                 label_words_n = 0 )))
+  ggsave(filename = paste0(Treeplotdir,"/treep_GSEK",name,".pdf"),width = 8,height = 7)
+}
+
+```
+
+
+
+

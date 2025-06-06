@@ -1,0 +1,570 @@
+---
+title: "Full RNAseq pipeline, from raw data to ORA/GSEA results"
+author: "A. A. A. Lingua"
+date: "2025-05-07"
+output: html_document
+---
+
+###Commandline-level process
+#Setup
+Command-line level processes done in WSL2 workspace:
+  wsl
+
+Original setup of environment following Griffithlab tutorial (https://rnabio.org/module-00-setup/0000/09/01/Environment/) and Danny Arends tutorial (https://www.youtube.com/watch?v=PlqDQBl22DI). Below software not all used, since I went with using the kallisto pseudo-alignment tool to do read counts. Links in bin for software currently installed. For each software, after creating link (ln -s /SOFTWAREPATH SYMBOLIC_LINK), usually required to give permissions through "chmod a+x SOFTWARE" command in bin directory.
+
+  ln -s /home/aurelien/software/STAR/source/STAR STAR
+
+  ln -s /home/aurelien/software/samtools/samtools samtools
+  ln -s /home/aurelien/software/bcftools/bcftools bcftools
+  ln -s /home/aurelien/software/sratoolkit/usr/local/ncbi/sra-tools/bin/fasterq-dump fasterq-dump --> extracts FASTQ/FASTA files from SRA accessions
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/cuffcompare cuffcompare --> Method to get stats from the comparison of your assembled transcripts to a reference genome,requires cufflinks-software-built files
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/cuffdiff cuffdiff --> differential transcript expression from sam files
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/cuffnorm cuffnorm --> normalize transcript expression values relative to library
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/cuffquant cuffquant --> quantify transcript expression
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/gtf_to_sam gtf_to_sam --> convert gtf file to sam file
+  
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/cuffmerge cuffmerge --> useful tool to merge genome assemblies together, e.g. when building the drosophila melanogaster genome fasta 
+  ln -s /home/aurelien/software/htslib/bgzip bgzip --> to compress or extract zip formats, here gz files (gzip), when troubleshooting data files and their quality  
+  ln -s /home/aurelien/software/bedtools/bedtools.static bedtools
+  ln -s /home/aurelien/software/kallisto/kallisto kallisto --> using as pseudoalignment tool to build alignment file and do read counts
+  ln -s /home/aurelien/software/gtfToGenePred gtfToGenePred
+  ln -s /home/aurelien/software/genePredToBed genePredToBed
+  ln -s /home/aurelien/software/FastQC/fastqc fastqc --> using to check raw/cleaned data quality
+  ln -s /home/aurelien/software/fastp/fastp fastp --> using to trim/clean reads
+  ln -s /home/aurelien/software/cufflinks-2.2.1.Linux_x86_64/gffread gffread --> using to make fai file 
+  
+To mount/remount the drive with your data, driver letter accordingly:
+  sudo mount -t drvfs d: /mnt/d
+
+Go to folder location containing all data files, then get the names for each file in two arrays separated for pair 1 or pair 2 of eahc sample respectively (change code if read files are named differently):
+  read1s=(*1.fq.gz)
+  read2s=(*2.fq.gz)
+Sorting each array alphabetically to ensure they will be in the same order for later functions:
+  read1s=($(sort <<<"${read1s[*]}"))
+  read2s=($(sort <<<"${read2s[*]}"))
+Saving both read arrays in bash script format using declare:
+  declare -p read1s read2s > /home/data/samples.txt
+Then, just load the read1s and read2s arrays into the commandline variables when starting up:
+  . samples.txt
+
+#Building index and mapping
+Built the full genome assembly from ensembl release fasta/fastq files for each chromosome assembly, mitochondrial dna assembly, and non-chromosomal genes, downloaded from their ftp server(see //wsl.localhost/Ubuntu/home/aurelien/genome/genomer.R)
+
+gffread takes gtf file and genome fasta, first builds a fai index file to locate/index genetic features from the genome fasta, then -w option makes it write a FASTA file with spliced exons for each transcript. Basically this command generates a FASTA file with the DNA sequences for all transcripts in a GFF file. (https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7222033/). Change transcripts_annotated output location when using:
+
+  gffread Drosophila_melanogaster.BDGP6.46.112.gtf -g Drosophila_melanogaster.BDGP6.46.dna_sm.genome.fa -w ~/data/newresults/Drosophila_melanogaster.BDGP6.46.dna_sm.transcripts_annotated.fa
+
+newvers
+  gffread Drosophila_melanogaster.BDGP6.54.114.gtf -g Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.fa -w ~/data/newresults/Drosophila_melanogaster.BDGP6.54.dna.transcripts_annotated.fa
+
+
+# create an index of the transcriptome file made above
+  kallisto index -i Drosophila_melanogaster.BDGP6.46.dna_sm.transcripts.fai Drosophila_melanogaster.BDGP6.46.dna_sm.transcripts_annotated.fa --verbose
+
+newvers
+  kallisto index -i Drosophila_melanogaster.BDGP6.54.dna.transcripts.fai Drosophila_melanogaster.BDGP6.54.dna.transcripts_annotated.fa --verbose
+#Checking data quality
+Go to folder location containing all data folders, then run fastQC to create qc reports of every data file:
+  fastqc *.fq.gz --memory 4096 -t 4 -o /mnt/c/Users/Aurelien/Expansion/proj28/qual_reports/fastqc
+When all fastqc's are done, run this to create one html file with the fastQC report data for all read files:
+  multiqc ./ -o multiqc -s -v  
+
+#Trimming data
+Removal of duplicated reads is counterproductive here, since we're looking for differential expression so removing duplicated reads removes our ability to quantify this. Number of nucleotides to trim in front should be relative to the noise seen in fastQC reports. Set phred quality score minimum to Q20 and max N% to 10%. This should be sufficient with good quality reads. change output/input folders/files. Keep --failed_out for this first run, not for every pair of reads since they are pretty heavy files even if they're a few percentages of each pair. Adapter reads should be downloaded depending on the sequencing technology used. Can try using 8 threads, otherwise lower to 6 and make sure nothing else is running on computer.
+Test this out on one pair before starting full run over all reads:
+  fastp --verbose -i ${read1s[1]} -I ${read2s[1]} -o  /home/aurelien/data/trimmed/${read1s[1]} -O /home/aurelien/data/trimmed/${read2s[$i]} -l 25 -x -g --trim_front1 13 --trim_front2 13 --qualified_quality_phred 20 --unqualified_percent_limit 10 --thread 8 --adapter_fasta /home/aurelien/adapters/illumina_sequencing_primer_5_to_3.fa --json /home/aurelien/data/trimmed/reports/$read.fastp.json --html /home/aurelien/data/trimmed/reports/$read.fastp.html --failed_out /home/aurelien/data/trimmed/reports/$read.failed.fa --dont_eval_duplication 
+Loop below iterates over every read pair. MAKE SURE READS ARE IN THE RIGHT RESPECTIVE ARRAYS AND ARRAYS ARE IN THE SAME ORDER: 
+  count=${#read1s[@]}
+    # make sure they're in order, then just iterate over number of pairs
+    for ((i=0; i<$count; ++i)); do
+    read=$(echo ${read1s[$i]}| cut -f 1-4 -d '_') 
+    fastp --verbose -i ${read1s[$i]} -I ${read2s[$i]} -o  /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/${read1s[$i]} -O /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/${read2s[$i]} -l 25 -x -g --trim_front1 13 --trim_front2 13 --qualified_quality_phred 20 --unqualified_percent_limit 10 --thread 8 --adapter_fasta /home/aurelien/adapters/illumina_sequencing_primer_5_to_3.fa --json /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/reports/$read.fastp.json --html /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/reports/$read.failed.fa --dont_eval_duplication 
+    done
+See explanation of function and parameters below. 
+    fastp --verbose -i ${read1s[$i]} -I ${read2s[$i]} \ # read inputs
+    -o  /home/aurelien/data/trimmed/${read1s[$i]} -O /home/aurelien/data/trimmed/${read2s[$i]} \ # read outputs
+    -l 25 -x -g --trim_front1 13 --trim_front2 13 \ # minimum length of 25, trim polyX (-x) and polyG (-g), trim 13 bps from front
+    --qualified_quality_phred 20 \ # setting the phred score for filtering bases by quality to >=Q20, default is 15
+    --unqualified_percent_limit 10 \ # setting percentage of bases allowed to be unqualified to 10%, default is 40    
+    --thread 6 \ # worker threads, default is 3
+    --adapter_fasta /home/aurelien/adapters/illumina_sequencing_primer_5_to_3.fa \ # adapter sequences
+    --json /home/aurelien/data/trimmed/reports/$read.fastp.json \ # json output
+    --html /home/aurelien/data/trimmed/reports/$read.fastp.html \ # html output
+    --failed_out /home/aurelien/data/trimmed/reports/$read.failed.fa \ # failed sequences (under 25 after trims and quality cutting) output
+    --dont_eval_duplication # Doing RNAseq, no need. Also, duplication info is available in fastqc reports + associated multiqc
+
+Re-perform fastqc+multiqc on cleaned reads:
+  fastqc *.fq.gz --memory 4096 -t 4 -o /home/aurelien/data
+  multiqc ./ -o multiqc -s -v 
+
+# Read counts through Kallisto pseudoalignment tool
+Performing kallisto quant, here with 100 bootstrap samples per pair to analyse, which will allow for transcript-level abundance estimates. Quant also has option for pseudobam file if ever you want to use different downstream methods that require BAM files. Need to give gtf file to also get projected pseudoalignements to genome sorted BAM file. 
+Need to know if RNAseq was done as rf-unstranded, stranded, etc. If unkown, can figure it out manually with salmon quant log results or UCSC blat (https://littlebitofdata.com/en/2017/08/strandness_in_rnaseq/)/.
+Need to give kallisto index location, output diractory, and the pairs of reads. Can increase thread count (default=1) with -t
+Run this once to check everything is working okay, then go with the loop:
+  kallisto quant -i /home/aurelien/data/newresults/Drosophila_melanogaster.BDGP6.54.dna.transcripts.fai -t 2 -o /home/aurelien/data/newresults/kallisto /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/PBS_IMD_6h_1_1.fq.gz /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/PBS_IMD_6h_1_2.fq.gz
+Explanation of function and parameters below.
+  kallisto quant -i /home/aurelien/data/results/Drosophila_melanogaster.BDGP6.46.dna_sm.transcripts.fai # Kallisto transcriptome index file
+  -t 7 # number of threads
+  -b 100 # number of bootstraps
+  --gtf /home/aurelien/genome/Drosophila_melanogaster.BDGP6.46.112.gtf # gtf file for pseudobam
+  --pseudobam --genomebam #pseudobam creation
+  -o /home/aurelien/data/results/kallisto # Output folder, where function will create a folder for each read pair
+  /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/Clean_PBS_IMD_48h_1_1.fq.gz # first file in read pair
+  /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/Clean_PBS_IMD_48h_1_2.fq.gz # second file in read pair
+
+Run loop below: 
+  for ((i=0; i<${#read1s[@]}; ++i)); do
+      read=$(echo ${read1s[$i]}| cut -f 1-4 -d '_') 
+      kallisto quant -i /home/aurelien/data/results_114/Drosophila_melanogaster.BDGP6.54.dna.transcripts.fai -t 7 -b 100 -o "/mnt/c/Users/Aurelien/OneDrive - Queen Mary, University of London/Documents/Experimental data analysis/RNAseq_pipeline/input/$read" /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/${read1s[$i]} /mnt/c/Users/Aurelien/Expansion/proj28/trimmed_data/${read2s[$i]} 
+  done
+  
+for ((i=0; i<${#read1s[@]}; ++i)); do
+    read=$(echo ${read1s[$i]}| cut -f 1-4 -d '_') 
+    echo $read
+     done
+
+
+### RNAseq R code setup, loading useful functions and file sources, as well as s2c and t2g matrices 
+
+```{r R environment setup, warning=FALSE}
+#####
+#> To change:
+#> - modify rootdir to desired rootdir path if not using current working directory
+#> - modify datapath to where quantification folders are held
+#####
+
+# Clean environment 
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+
+### ENTER ROOT DIR PATH BELOW, or keep the renv/project rootdir
+rootdir <- getwd()
+# make Robject folder to hold all Robjects
+if (!dir.exists(file.path(rootdir, "Robjects"))) {
+  dir.create(file.path(rootdir, "Robjects"))
+}
+Robjectsdir <- paste0(rootdir, "/Robjects")
+# make graphs directory to hold all graph folders
+if (!dir.exists(file.path(rootdir, "graphs"))) {
+  dir.create(file.path(rootdir, "graphs"))
+}
+Graphsdir <- paste0(rootdir, "/graphs")
+# make biovariation graph folder
+if (!dir.exists(file.path(Graphsdir, "BioVar"))) {
+  dir.create(file.path(Graphsdir, "BioVar"))
+}
+# Saving directory names for use in scripts
+BVdir <- paste0(Graphsdir, "/BioVar")
+
+### ENTER PATH WITH KALLISTO FOLDERS BELOW
+datapath <- "C://Users/Aurelien/OneDrive - Queen Mary, University of London/Documents/Experimental data analysis/RNAseq_pipeline/input/"
+
+# sample names for all samples
+sample_list <- dir(file.path(datapath))
+# paths to each kallisto folder for each processed sample
+kal_dirs <- file.path(datapath, sample_list)
+# abundance file paths for tximport
+abundance_files_all <- file.path(datapath,sample_list, "abundance.h5")
+names(abundance_files_all) <- sample_list
+
+#setting root directory
+knitr::opts_knit$set(root.dir = rootdir)
+# options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = F, dplyr.summarise.inform = F) # avoid truncated output in R console and scientific notation
+# Set seed to ensure reproducibility in any function sthat require randomness
+set.seed(123456)
+
+suppressMessages({
+  library(edgeR)    # for DGE analysis
+  library(pheatmap) # for heatmap graphs
+  library(dplyr)    # for useful modification functions of dataframes, lists, etc
+  library(data.table)      # to reorder the t2ged matrix
+  library(clusterProfiler) # ORA/GSEA
+  library(org.Dm.eg.db)    # Dmel db for GO terms/Kegg pathways
+  library(DOSE)            # for some graphing functions (facet_grid)
+  library(enrichplot)      # Graphing functions (pairwise_termsim)
+  library(ggplot2)  # graphing module
+  library(pathview) # to produce pathview plots of KEGG pathways with enriched genes/transcripts 
+  library(cowplot)
+  #library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
+  library(RColorBrewer) # for a colourful plot
+  library(ggrepel) # for nice annotations
+  library(cluster)         # for PAM clustering function
+  library(factoextra)      # for the various graphing methods in finding optimal k number
+  library(openxlsx) # to save enrichment analysis results
+  library(forcats) # to reverse order of factor for avglogCPM function
+  library(tximport)
+})
+```
+
+
+```{r making t2g file}
+#####
+#> To change:
+#> - Rebuild t2g if newer ensembl release version available AND quantification files were made with the new genome.
+#####
+
+#####
+# building transcript to gene datatable with gene IDs (ensembl, entrez), and transcript IDs, of all Dmel genes
+# loading t2g object after having built it once.
+if(file.exists(paste0(Robjectsdir, "/t2g_dmel.rds"))){
+  t2g <- readRDS(paste0(Robjectsdir, "/t2g_dmel.rds"))
+}else{
+  # gets information from the Dmel gene dataset. The transcript id, ensembl gene id, and
+  # external gene id are collated together into the returned transcript-to-gene matrix.
+  mart <- biomaRt::useMart(biomart = "ensembl", dataset = "dmelanogaster_gene_ensembl")
+	# modify this to choose what information to grab from ensembl and external (flybase) databases. see mart@attributes[["name"]] to view options
+  t2g <- biomaRt::getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id", "external_gene_name","entrezgene_id","description", "transcript_biotype"), mart = mart)
+	t2g <- dplyr::rename(t2g, target_id = ensembl_transcript_id,
+	              ens_gene = ensembl_gene_id,
+	              ext_gene = external_gene_name,
+	              entrez_gene = entrezgene_id)
+	# modify this to choose the IDs and info you want to keep in t2g
+	t2g <- dplyr::select(t2g, c('target_id', 'ens_gene', 'ext_gene', "entrez_gene"))
+# saveRDS(object = t2g, file = paste0(Robjectsdir, "/t2g_dmel.rds"))
+}
+
+
+
+```
+
+```{r Building s2c and design matrix, include=FALSE}
+#####
+#> To change:
+#> - Construct new sample 2 covariate (s2c) matrix with the current experiment design
+#> - save new s2c matrix into robjectsdir
+#> - modify timepoint-specific sample lists accordingly. These lists are just to simplify working with separate timepoints, which matters for example when looking at biological variation, or when you are currently only interested in one timepoint.
+#####
+
+
+# Preparing sample to covariate (factors really) matrix to inform model design.
+# This needs to be customized to the dataset and sample groups. Below is a previous example, modify accordingly.
+if(file.exists(paste0(Robjectsdir, "/s2c.rds"))){
+  s2c <- readRDS(paste0(Robjectsdir, "/s2c.rds"))
+  design <- s2c$design
+}else{
+  # Reordering samples to have uninfected W1118 samples first as controls.
+  sample_list <- sort(sample_list, decreasing = TRUE)
+  # Creating samples to covariates matrix, with the three factors from the experiment design
+  s2c <- data.frame(sample=sample_list, timepoint = rep(c("6h", "48h"), each=4), treatment = rep(c("Unin", "U112", "PBS"), each=16), host = rep(c("W1118", "IMD"), each=8), kal_dirs = kal_dirs, stringsAsFactors=FALSE)
+  # Combining all factors into group to create design matrix.
+  group <- paste(s2c$host, s2c$treatment, s2c$timepoint, sep=".")
+  s2c$group <- factor(group)
+  # Creating means model design matrix with appropriate labels.
+  design <- model.matrix(~0+group)
+  colnames(design) <- levels(factor(group))
+  # Adding matrix to s2c dataframe
+  s2c$design <- design
+  saveRDS(object = s2c, file = paste0(Robjectsdir, "/s2c.rds"))
+}
+
+# separate timepoint sample vectors if you want to work with the timepoints separately e.g. when looping a function/code snippet. 
+samples_6h <- s2c$sample[s2c$timepoint=="6h"]
+samples_48h <- s2c$sample[s2c$timepoint=="48h"]
+
+
+```
+
+### Creating DGElist object with read counts
+
+```{r Loading Kallisto counts - transcript and gene-level}
+if(file.exists(paste0(Robjectsdir, "/y_trans.rds"))){
+  y_trans <- readRDS(paste0(Robjectsdir, "/y_trans.rds"))
+}else{
+  # CatchKallisto method from Pedro L Baldoni, et al., 2023 (https://doi.org/10.1093/nar/gkad1167)
+  # Method uses bootstrap samples to estimate an overdispersion parameter per 
+  # transcript, representing the variance from the ambiguity of assigning 
+  # sequence reads to transcripts. 
+  kallisto_transcripts <- catchKallisto(paths = s2c$kal_dirs, verbose = FALSE)
+  # getting transcript counts scaled to the overdispersion parameters
+  cts.scaled <- kallisto_transcripts$counts/kallisto_transcripts$annotation$Overdispersion
+  # taking all transcripts in my reads to get the associated ensembl and gene name for each
+  transcripts <- rownames(kallisto_transcripts$annotation)
+  # using %in% operator which literally is made for when you want to check that one element or list of elements belongs to a DF. Taking only the gene name column from t2g
+  t2ged <- t2g[t2g$target_id %in% transcripts & !duplicated(t2g$target_id),]
+  #Warning: this removes duplicates, i.e. only gives one row of IDs for each transcript (2248 transcripts duplicates exist where they map to multiple gene IDs).
+  
+  #!!! INCREDIBLY IMPORTANT PART => REORDER t2ged IN THE SAME ORDER AS THE COUNTS MATRIX, SO TRANSCRIPTS ARE LINKED TO THE CORRECT GENE IDS
+  # Turning t2ged into data.table object
+  t2ged <- as.data.table(t2ged)
+  # reordering t2ged by same order as kallisto counts object through transcript col
+  t2ged<-t2ged[order(factor(t2ged$target_id,levels = rownames(cts.scaled)))]
+  # building up annotation matrix
+  kallisto_transcripts$annotation[["TranscriptID"]] <- t2ged[[1]]
+  kallisto_transcripts$annotation[["flybaseID"]] <- t2ged[[2]]
+  kallisto_transcripts$annotation[["ext_gene"]] <- t2ged[[3]]
+  kallisto_transcripts$annotation[["ENTREZID"]] <- as.character(t2ged[[4]])
+  # Creating annotation dataframe to be entered in DGEList y
+  annot <- kallisto_transcripts$annotation[4:7]
+  # making DGEList object for analysis, with scaled counts, sample names, gene annotations
+  y_trans <- DGEList(counts = cts.scaled, samples = s2c$sample, genes = annot)
+  # Tidying up names
+  rownames(y_trans$samples)<- s2c$sample
+  colnames(y_trans$counts) <- s2c$sample
+  
+  # Applying edgeR's filterByExpr
+  keep <- filterByExpr(y_trans, design = s2c$design)
+  summary(keep)
+  # More precisely, the filtering keeps genes that have CPM >= CPM.cutoff in MinSampleSize samples, where CPM.cutoff = min.count/median(lib.size)*1e6 and MinSampleSize is the smallest group sample size or, more generally, the minimum inverse leverage computed from the design matrix.
+  # If all the group samples sizes are large, then the above filtering rule is relaxed slightly. If MinSampleSize > large.n, then genes are kept if CPM >= CPM.cutoff in k samples where k = large.n + (MinSampleSize - large.n) * min.prop. This rule requires that genes are expressed in at least min.prop * MinSampleSize samples, even when MinSampleSize is large.
+  # 
+  # In addition, each kept gene is required to have at least min.total.count reads across all the samples.
+  # edgeR defaults: min.count = 10, min.total.count = 15, large.n = 10, min.prop = 0.7
+  y_trans <- y_trans[keep, , keep.lib.sizes = FALSE]
+  y_trans <- calcNormFactors(y_trans)
+  saveRDS(y_trans, file = paste0(Robjectsdir, "/y_trans.rds"))
+}
+if(file.exists(paste0(Robjectsdir, "/y_gene.rds"))){
+  y_gene <- readRDS(paste0(Robjectsdir, "/y_gene.rds"))
+}else{
+  # Need to account for possible length bias in counts, which function does if 
+  # called with countsFromAbundance = "lengthScaledTPM".
+  # this is “bias corrected counts without an offset”.
+  # the function will output gene-level (aggregated transcript-level) information
+  txi.gene <- tximport(abundance_files_all, type = "kallisto", tx2gene = t2g, countsFromAbundance = "lengthScaledTPM")
+  # same as above but for tximport method, which aggregates transcripts to gene-level estimation, with Fbgn flybase IDs as names.
+  flygenes <- rownames(txi.gene$counts)
+  t2ged <- t2g[t2g$ens_gene %in% flygenes & !duplicated(t2g$ens_gene),]
+  # Creating annotation dataframe to be entered in DGEList y
+  # Turning t2ged into data.table object
+  t2ged <- as.data.table(t2ged)
+  # reordering t2ged by same order as kallisto counts object through transcript col
+  t2ged<-t2ged[order(factor(t2ged$ens_gene,levels = flygenes))]
+  annot <- t2ged
+  # adding sample information to dataframe
+  txi.gene$sample <- s2c$sample
+  # reordering counts matrix columns to follow above design.
+  txi.gene$counts <- txi.gene$counts[, s2c$sample]
+  #since importing using tximport option 'lengthScaledTPM', the counts are already bias corrected without offset and can be used as the gene-level counts matrix as-is.
+  
+  y_gene <- DGEList(counts = txi.gene$counts, samples = s2c$sample, genes = annot)
+  rownames(y_gene$samples)<- s2c$sample
+  colnames(y_gene$counts) <- s2c$sample
+  
+  keep <- filterByExpr(y_gene, design = s2c$design)
+  summary(keep)
+  # More precisely, the filtering keeps genes that have CPM >= CPM.cutoff in MinSampleSize samples, where CPM.cutoff = min.count/median(lib.size)*1e6 and MinSampleSize is the smallest group sample size or, more generally, the minimum inverse leverage computed from the design matrix.
+  # If all the group samples sizes are large, then the above filtering rule is relaxed slightly. If MinSampleSize > large.n, then genes are kept if CPM >= CPM.cutoff in k samples where k = large.n + (MinSampleSize - large.n) * min.prop. This rule requires that genes are expressed in at least min.prop * MinSampleSize samples, even when MinSampleSize is large.
+  # 
+  # In addition, each kept gene is required to have at least min.total.count reads across all the samples.
+  # edgeR defaults: min.count = 10, min.total.count = 15, large.n = 10, min.prop = 0.7
+  y_gene <- y_gene[keep, , keep.lib.sizes = FALSE]
+  y_gene <- calcNormFactors(y_gene)
+  saveRDS(y_gene, file = paste0(Robjectsdir, "/y_gene.rds"))
+}
+# change this if you want to change transcript-level to gene-level
+y <- y_gene
+```
+
+
+```{r building logCPM and avlogCPM}
+#####
+#> To change:
+#> - modify assignment of group_names to match data at hand
+#> - modify number of samples to average over (i.e. number of samples per condition) in avlogCPM calculation
+#> 
+#> The logCPM values are important for visual representation of transcript expression, while avlogCPM gives the average of each transcript's logCPM values over all the biological repeats in the same condition. The values from avlogCPM are used in functions (initialized in DE graphs and later scripts) to output tabled expression and fold-change information of a user-chosen transcript or set of transcripts.
+#####
+
+# converting counts to log2 counts per million into new matrix with sample names as column titles and transcript names as row titles
+logCPM <- cpm(y, prior.count=2, log=TRUE) # prior.count is avg count to be added to each observation to not take the log of zero. default is 2
+# building log2cpm with row names as associated gene names and column names as sample names
+rownames(logCPM) <- y$genes[["ens_gene"]] # Ensured values link to correct transcript, see 1 NOV 24 log entry
+colnames(logCPM) <- s2c$sample
+saveRDS(logCPM, file = paste0(Robjectsdir, "/logCPM.rds"))
+# retrieving group names from contrasts matrix and reordering to match logCPM column name order
+group_names <- rev(rownames(contrasts)) # contrast names bc I can then use contrast to search in avlogCPM
+group_names <- group_names[c(1,2,7,8,3,4,9,10,5,6,11,12)] # reordering to match logCPM order
+# seq iterates i from 1 to 48 by 4. lapply takes i and applies rowMeans over i:i+4,
+# meaning that rowMeans calculates the mean of each row using the 4 values in the range i:i+3
+avlogCPM <- as.data.frame(lapply(seq(1, dim(logCPM)[2], by = 4), function(i) {
+  rowMeans(logCPM[, i:(i+3)], na.rm = TRUE)
+}))
+# Renaming the columns according to the sample group they represent
+colnames(avlogCPM) <- group_names
+saveRDS(avlogCPM, file = paste0(Robjectsdir, "/avlogCPM.rds"))
+
+
+
+```
+
+### Making MDS plots, heatmap(s), and BCV plots to ensure biological variation is fine
+
+```{r MDS-all, echo=FALSE}
+#####
+#> To change:
+#> - modify numbers of reps for, and amounts of, colours and shapes to align with data design.
+#>
+#####
+
+# attributing values used in function for ease of reading
+sample_count <- dim(y[["samples"]])[1]
+sample1_name <- y[["samples"]][["samples"]][1]
+
+### MDS for all samples
+# producing MDSplot object, that calculates variances between samples' transcript expression data
+mds <- plotMDS(y, top = 500, labels = rownames(y$samples), dim.plot = c(1,2), var.explained = TRUE)
+# saving base MDS plot that uses the name of each sample as their point on the graph.
+dev.copy2pdf(file = paste0(BVdir, "/MDS_all_named.pdf"))
+  # top 500 'genes' to use for calculating pairwise distances.
+  # dim.plot 1,2 to graph over PC1 and PC2. var.explained true adds percentage of variation
+  # each principle component accounts for on their respective axis title.
+
+# making axes labels from data in MDSplot object. 
+# setting up plot customizations depending on sample list size
+cols = c(rep("grey",8), rep("red",8))
+shapes <- rep(rep(c(0,15,1,19,2,17), each=4),2)
+shapes <- c(rep(rep(c(0,15),each=4),2),rep(rep(c(1,19),each=4),2),rep(rep(c(2,17),each=4),2))
+title <- "MDS plot of all samples"
+fname <- paste0(BVdir, "/MDS_all.pdf")
+# setting up plot parameters and options
+# writing variance percentage of respective pc through rounding value to 2 digits and converting to percentage notation
+xlab = paste0(mds[["axislabel"]]," 1 (", scales::label_percent()(round(mds[["var.explained"]][1], digits= 2)),")")
+ylab = paste0(mds[["axislabel"]]," 2 (", scales::label_percent()(round(mds[["var.explained"]][2], digits= 2)),")")
+# Options below initializes plot parameters. It adds margin to the right of the plot to allow for legends to be written outside of the graph
+par(xpd=T, mar=par()$mar+c(0,0,0,6))
+# using plot function to allow for more customization. plot initial plot with axes labels
+plot(mds, xlab = xlab, ylab = ylab)
+# setting colour for plot background
+rect(par("usr")[1], par("usr")[3], par("usr")[2], par("usr")[4], col = "honeydew")
+# writing points onto plot, with relevant colours and shapes
+points(mds, col = cols, pch = shapes)
+print(shapes)
+# add legends and title. Inset specifies legend location
+legend('topright', 
+       col="black",
+       inset=c(-0.13,0), 
+       legend=unique(s2c$treatment), 
+       pch = c(0,1,2), cex = 0.7, bg = "honeydew")
+legend('bottomright', 
+       fill = unique(cols), 
+       inset=c(-0.165,0), 
+       legend=unique(s2c$host), cex = 0.7, bg = "honeydew")
+legend("right", 
+       inset=c(-0.115,0), 
+       legend=unique(s2c$timepoint), pch = c(1,19), cex = 0.7, bg = "honeydew")
+title(title)
+dev.copy2pdf(file = fname)
+
+
+### MDS for samples at Xh 
+#> - modify accordingly and copy/paste for number of timepoints or groups to explore
+#> - remember to modify filenames to avoid overwriting anything before saving
+# # producing MDSplot object, that calculates variances between samples' transcript expression data
+# mds <- plotMDS(y, top = 500, labels = rownames(y$samples), dim.plot = c(1,2), var.explained = TRUE)
+# # saving base MDS plot that uses the name of each sample as their point on the graph.
+# dev.copy2pdf(file = paste0(BVdir, "/NEWNAME"))
+#   # top 500 'genes' to use for calculating pairwise distances.
+#   # dim.plot 1,2 to graph over PC1 and PC2. var.explained true adds percentage of variation
+#   # each principle component accounts for on their respective axis title.
+# 
+# # making axes labels from data in MDSplot object. 
+# # setting up plot customizations depending on sample list size
+# cols = c(rep("grey",8), rep("red",8))
+# shapes <- rep(rep(c(0,15,1,19,2,17), each=4),2)
+# shapes <- c(rep(rep(c(0,15),each=4),2),rep(rep(c(1,19),each=4),2),rep(rep(c(2,17),each=4),2))
+# title <- "MDS plot of all samples"
+# fname <- paste0(BVdir, "/NEWNAME.pdf")
+# # setting up plot parameters and options
+# # writing variance percentage of respective pc through rounding value to 2 digits and converting to percentage notation
+# xlab = paste0(mds[["axislabel"]]," 1 (", scales::label_percent()(round(mds[["var.explained"]][1], digits= 2)),")")
+# ylab = paste0(mds[["axislabel"]]," 2 (", scales::label_percent()(round(mds[["var.explained"]][2], digits= 2)),")")
+# # Options below initializes plot parameters. It adds margin to the right of the plot to allow for legends to be written outside of the graph
+# par(xpd=T, mar=par()$mar+c(0,0,0,6))
+# # using plot function to allow for more customization. plot initial plot with axes labels
+# plot(mds, xlab = xlab, ylab = ylab)
+# # setting colour for plot background
+# rect(par("usr")[1], par("usr")[3], par("usr")[2], par("usr")[4], col = "honeydew")
+# # writing points onto plot, with relevant colours and shapes
+# points(mds, col = cols, pch = shapes)
+# print(shapes)
+# # add legends and title. Inset specifies legend location
+# legend('topright', 
+#        col="black",
+#        inset=c(-0.13,0), 
+#        legend=unique(s2c$treatment), 
+#        pch = c(0,1,2), cex = 0.7, bg = "honeydew")
+# legend('bottomright', 
+#        fill = unique(cols), 
+#        inset=c(-0.165,0), 
+#        legend=unique(s2c$host), cex = 0.7, bg = "honeydew")
+# legend("right", 
+#        inset=c(-0.115,0), 
+#        legend=unique(s2c$timepoint), pch = c(1,19), cex = 0.7, bg = "honeydew")
+# title(title)
+# dev.copy2pdf(file = fname)
+
+```
+
+```{r BCV variation check}
+y <- estimateDisp(y, design=design, robust=TRUE)
+plotBCV(y, main = "BCV plot - All samples")
+dev.copy2pdf(file = paste0(BVdir, "/BCV_plot_all.pdf"))
+```
+
+```{r heatmaps}
+#####
+#> To change:
+#> - uncomment and modify extra correlation matrices for groups of interest
+#>
+#####
+
+# Visualization of correlation of sample groups through their transcript expression values. To accommodate for large variances in transcript expression even with normalization, the values correlated are log2 of their counts per million, calculated previously as logCPM dataframe is used in other sections as well.
+grouping <- s2c[,2:4]
+rownames(grouping)<-s2c$sample
+# Correlation of logCPM values by pearson method
+allCors <- cor(logCPM, method="pearson", use="pairwise.complete.obs")
+pheatmap(allCors, 
+         annotation_col = grouping, 
+         show_rownames = FALSE, 
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "correlation",
+         filename = paste0(BVdir, "/Heatmap_all_samples.pdf"))
+
+# # making correlation marices for varying groups to compare
+# Cors_48h <- cor(logCPM[,colnames(logCPM) %in% samples_48h], method="pearson", use="pairwise.complete.obs")
+# Cors_6h <- cor(logCPM[,colnames(logCPM) %in% samples_6h], method="pearson", use="pairwise.complete.obs")
+# grouping_48h <- grouping[2:3][rownames(grouping)%in% samples_48h,]
+# grouping_6h <- grouping[2:3][rownames(grouping)%in% samples_6h,]
+# pheatmap(Cors_6h, annotation_col = grouping_6h, show_rownames = FALSE,clustering_distance_cols = "correlation",clustering_distance_rows = "correlation")
+# pheatmap(Cors_48h, annotation_col = grouping_48h, show_rownames = FALSE,clustering_distance_cols = "correlation",clustering_distance_rows = "correlation")
+
+```
+
+```{r fitting model}
+# Fitting a negative binomial generalized log-linear model to the read counts for each transcript.
+fit <- glmQLFit(y, s2c$design, robust=TRUE)
+plotQLDisp(fit)
+saveRDS(fit, file = paste0(Robjectsdir, "/fit.rds"))
+```
+
+### Producing graphs for ORA/GSEA results, with option for individual contrast or looping over all contrasts
+
+```{r}
+
+```
+
+
+
+### Currently unused code
+
+```{r}
+### If separate loading of quantifications depending on timepoint/other is desired, modify and uncomment below
+# # sample names for samples at 6h - used for abundance files and such, replaces after with array of different ordering
+# samples_6h = list.files(datapath, pattern="*_6h_[0-9]{1}")
+# # sample names for samples at 48h
+# samples_48h = list.files(datapath, pattern="*_48h_[0-9]{1}")
+# # Directory list for kallisto files.
+# # getting abundance hdf5 file paths for each grouping (6h, 48h, all)
+# abundance_files_48h <- file.path(datapath,samples_48h, "abundance.h5")
+# # assign sample name to its respective abundance file filepath
+# names(abundance_files_48h) <- samples_48h
+# check that sample name is assigned to the correct filepath, for each array
+# abundance_files_48h
+# abundance_files_6h <- file.path(datapath,samples_6h, "abundance.h5")
+# names(abundance_files_6h) <- samples_6h
+# abundance_files_6h
+# abundance_files_all
+
+```
+
