@@ -1,0 +1,4 @@
+.Rproj.user
+*.pdf
+*.rds
+!t2g_dmel.rds
