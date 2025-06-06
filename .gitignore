@@ -2,3 +2,4 @@
 *.pdf
 *.rds
 !t2g_dmel.rds
+public-key.asc
