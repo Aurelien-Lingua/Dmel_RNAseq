@@ -58,17 +58,17 @@ chrs <- c("nonchromosomal", "primary_assembly.2L","primary_assembly.2R","primary
 
 
 # Create an empty file for the whole assembly
-cat("", file = "testerooney.fa")
+cat("", file = "genome/Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.fa")
 # loopover files and add them to whole assembly
 for(file_name in fasta_names){
   fname <- paste0("genome/", file_name)
   # Extract and merge into a fast file
-  cmd <- paste0("wsl zcat ", fname, " >> genome/testerooney.fa")
+  cmd <- paste0("wsl zcat ", fname, " >> genome/Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.fa")
   cat(cmd, "\n")
   system(cmd)
 }
 
 # Compress the fasta file using bgzip (keep original with -k) --> ned to do in cmdline atm
-cmd <- paste0("wsl bgzip genome/testerooney.fa -k")
+cmd <- paste0("wsl bgzip genome/Drosophila_melanogaster.BDGP6.54.dna.primary_assembly.fa -k")
 cat(cmd, "\n")
 
