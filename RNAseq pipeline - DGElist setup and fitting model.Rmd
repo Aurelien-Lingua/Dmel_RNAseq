@@ -1,0 +1,247 @@
+---
+title: "RNAseq pipeline - DGElist setup and fitting"
+author: "A. A. A. Lingua"
+date: "2025-06-11"
+output: html_document
+---
+
+### RNAseq R code setup, loading useful functions and file sources, as well as s2c and t2g matrices 
+
+```{r R environment setup, warning=FALSE}
+#####
+#> To change:
+#> - modify rootdir to desired rootdir path if not using current working directory
+#> - modify datapath to where quantification folders are held
+#####
+
+# Clean environment 
+rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
+gc() # free up memory and report the memory usage
+
+### ENTER ROOT DIR PATH BELOW, or keep the renv/project rootdir
+rootdir <- getwd()
+# make Robject folder to hold all Robjects
+if (!dir.exists(file.path(rootdir, "Robjects"))) {
+  dir.create(file.path(rootdir, "Robjects"))
+}
+Robjectsdir <- paste0(rootdir, "/Robjects")
+# make graphs directory to hold all graph folders
+if (!dir.exists(file.path(rootdir, "graphs"))) {
+  dir.create(file.path(rootdir, "graphs"))
+}
+Graphsdir <- paste0(rootdir, "/graphs")
+# make biovariation graph folder
+if (!dir.exists(file.path(Graphsdir, "BioVar"))) {
+  dir.create(file.path(Graphsdir, "BioVar"))
+}
+# Saving directory names for use in scripts
+BVdir <- paste0(Graphsdir, "/BioVar")
+
+### ENTER PATH WITH KALLISTO FOLDERS BELOW
+datapath <- "C://Users/Aurelien/OneDrive - Queen Mary, University of London/Documents/Experimental data analysis/Dmel_RNAseq/input"
+
+# sample names for all samples
+sample_list <- dir(file.path(datapath))
+# checking that all files are found
+length(sample_list)
+# paths to each kallisto folder for each processed sample
+kal_dirs <- file.path(datapath, sample_list)
+# abundance file paths for tximport
+abundance_files_all <- file.path(datapath,sample_list, "abundance.h5")
+names(abundance_files_all) <- sample_list
+
+#setting root directory
+knitr::opts_knit$set(root.dir = rootdir)
+# options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = F, dplyr.summarise.inform = F) # avoid truncated output in R console and scientific notation
+# Set seed to ensure reproducibility in any functions that require randomness
+set.seed(123456)
+
+suppressMessages({
+  library(edgeR)    # for DGE analysis
+  library(pheatmap) # for heatmap graphs
+  library(data.table)      # to reorder the t2ged matrix
+  library(org.Dm.eg.db)    # Dmel db for GO terms/Kegg pathways
+  library(tximport) #importing kallisto counts
+})
+```
+
+
+```{r making t2g file}
+#####
+#> To change:
+#> - Rebuild t2g if newer ensembl release version available AND quantification files were made with the new genome.
+#####
+
+#####
+# building transcript to gene datatable with gene IDs (ensembl, entrez), and transcript IDs, of all Dmel genes
+# loading t2g object after having built it once.
+if(file.exists(paste0(Robjectsdir, "/t2g_dmel.rds"))){
+  t2g <- readRDS(paste0(Robjectsdir, "/t2g_dmel.rds"))
+}else{
+  # gets information from the Dmel gene dataset. The transcript id, ensembl gene id, and
+  # external gene id are collated together into the returned transcript-to-gene matrix.
+  mart <- biomaRt::useMart(biomart = "ensembl", dataset = "dmelanogaster_gene_ensembl")
+	# modify this to choose what information to grab from ensembl and external (flybase) databases. see mart@attributes[["name"]] to view options
+  t2g <- biomaRt::getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id", "external_gene_name","entrezgene_id","description", "transcript_biotype"), mart = mart)
+	t2g <- dplyr::rename(t2g, target_id = ensembl_transcript_id,
+	              ens_gene = ensembl_gene_id,
+	              ext_gene = external_gene_name,
+	              entrez_gene = entrezgene_id)
+	# modify this to choose the IDs and info you want to keep in t2g
+	t2g <- dplyr::select(t2g, c('target_id', 'ens_gene', 'ext_gene', "entrez_gene"))
+  saveRDS(object = t2g, file = paste0(Robjectsdir, "/t2g_dmel.rds"))
+}
+```
+
+```{r Building s2c and design matrix, include=FALSE}
+#####
+#> To change:
+#> - Construct new sample 2 covariate (s2c) matrix with the current experiment design
+#> - save new s2c matrix into Robjectsdir
+#> - modify timepoint-specific sample lists accordingly. These lists are just to simplify working with separate timepoints, which matters for example when looking at biological variation, or when you are currently only interested in one timepoint.
+#####
+
+
+# Preparing sample to covariate (factors really) matrix to inform model design.
+# This needs to be customized to the dataset and sample groups. Below is a previous example, modify accordingly.
+if(file.exists(paste0(Robjectsdir, "/s2c.rds"))){
+  s2c <- readRDS(paste0(Robjectsdir, "/s2c.rds"))
+  design <- s2c$design
+}else{
+  # Reordering samples to have uninfected W1118 samples first as controls.
+  sample_list <- sort(sample_list, decreasing = TRUE)
+  # Creating samples to covariates matrix, with the three factors from the experiment design
+  s2c <- data.frame(sample=sample_list[1:25], 
+                    treatment = c(rep(c("LB"),each =5),
+                                  rep(c("PAO1",
+                                        "pqsR"), each=10)), 
+                    dose = c(rep(c("vehicle"),each =5),
+                                  rep(c("high",
+                                        "low"), each=5,times=2)),
+                    kal_dirs = kal_dirs[1:25], stringsAsFactors=FALSE)
+  # Combining all factors into group to create design matrix. 
+  group <- paste(s2c$treatment, s2c$dose, sep =".") 
+  s2c$group <- factor(group) #treatment only factor. dose not a factor because LB has single dose
+  # Creating means model design matrix with appropriate labels.
+  design <- model.matrix(~group) # matrix with intercept, here the LB group
+  colnames(design) <- levels(factor(group))
+  # Adding matrix to s2c dataframe
+  s2c$design <- design
+  saveRDS(object = s2c, file = paste0(Robjectsdir, "/s2c.rds"))
+}
+
+```
+
+### Creating DGElist object with read counts
+
+```{r Loading Kallisto counts - gene-level aggregation}
+if(file.exists(paste0(Robjectsdir, "/y.rds"))){
+  y <- readRDS(paste0(Robjectsdir, "/y.rds"))
+}else{
+  ##loading readcounts
+  # Need to account for possible length bias in counts, which function does if 
+  # called with countsFromAbundance = "lengthScaledTPM".
+  # this is “bias corrected counts without an offset”.
+  # the function will output gene-level (aggregated transcript-level) information
+  txi.gene <- tximport(abundance_files_all, 
+                       type = "kallisto", 
+                       tx2gene = t2g, 
+                       countsFromAbundance = "lengthScaledTPM")
+  ## Creating annotation dataframe to be entered in DGEList y
+  # extracting from t2g a df of gene identifiers for all genes found in sequencing that passed quality filters
+  flygenes <- rownames(txi.gene$counts)
+  t2ged <- t2g[t2g$ens_gene %in% flygenes & !duplicated(t2g$ens_gene),]
+  # Turning t2ged into data.table object for reordering
+  t2ged <- as.data.table(t2ged)
+  # reordering t2ged by same order as kallisto counts object through ensembl gene ID (FBgn) 
+  t2ged <- t2ged[order(factor(t2ged$ens_gene,levels = flygenes))]
+  annot <- t2ged
+  # Checking that order of genes is the same between annotation table and counts df 
+  summary(row.names(txi.gene$abundance)== annot$ens_gene)
+  # adding sample information to dataframe
+  txi.gene$sample <- s2c$sample
+  # reordering counts matrix columns to follow above design.
+  txi.gene$counts <- txi.gene$counts[, s2c$sample]
+  #since importing using tximport option 'lengthScaledTPM', the counts are already bias corrected without offset and can be used as the gene-level counts matrix as-is.
+  ##Creating DGElist object containing readcounts, sample list, annotation table
+  y <- DGEList(counts = txi.gene$counts, samples = s2c$sample, genes = annot)
+  rownames(y$samples)<- s2c$sample
+  colnames(y$counts) <- s2c$sample # may be unnecessary since txi.gene$counts should have the right names in right order already
+  
+  # Filtering genes out that aren't expressed highly enough and/or not expressed highly enough in enough sample groups
+  keep <- filterByExpr(y, design = s2c$design)
+  summary(keep)
+  # More precisely, the filtering keeps genes that have CPM >= CPM.cutoff in MinSampleSize samples, where CPM.cutoff = min.count/median(lib.size)*1e6 and MinSampleSize is the smallest group sample size or, more generally, the minimum inverse leverage computed from the design matrix.
+  # If all the group samples sizes are large, then the above filtering rule is relaxed slightly. If MinSampleSize > large.n, then genes are kept if CPM >= CPM.cutoff in k samples where k = large.n + (MinSampleSize - large.n) * min.prop. This rule requires that genes are expressed in at least min.prop * MinSampleSize samples, even when MinSampleSize is large.
+  # In addition, each kept gene is required to have at least min.total.count reads across all the samples.
+  # edgeR defaults: min.count = 10, min.total.count = 15, large.n = 10, min.prop = 0.7 - these are good for general whole-body RNAseq, unless the experiment design/RNAseq type demands different filtering.
+  # keeping only the genes that passed the filtering, and readjusting library sizes accordingly
+  y <- y[keep, , keep.lib.sizes = FALSE]
+  # normalizing gene expression by library size to account for differences in sequencing depth between samples
+  y <- calcNormFactors(y)
+  # saving object
+  saveRDS(y, file = paste0(Robjectsdir, "/y.rds"))
+}
+```
+
+### Creating Contrast matrix containing all required contrasts to test out in analysis
+
+```{r Building contrasts matrix}
+#####
+#> To change:
+#> - modify the contrasts matrix with all contrasts to potentially explore.
+#> - Edit order in contrast designs according to desired reading of results. Currently, comparisons are PAO1-centric, high-centric, i.e. upregulation in a contrast would mean gene is upregulated in PAO1 sample group compared to pqsR, and for high vs low upregulation would mean gene is upregulated in high-dose samples compared to low-dose. When there is a clash between both, PAO1-centric takes priority.
+#> This section is very important as you are building the totality of contrasts to explore differential expression in. The contrasts matrix is later used for differential expression analysis, enrichment analysis, and to loop through other functions, as well as to label filenames and graphs with the contrast their data belongs to. 
+#>
+#####
+#Building into one matrix for ease of use
+contrasts <- makeContrasts(
+  # basic comparison with vehicle
+  PAO1_low = PAO1.low-LB.vehicle,
+  PAO1_high = PAO1.high-LB.vehicle,
+  psqR_low = pqsR.low-LB.vehicle,
+  pqsR_high = pqsR.high-LB.vehicle,
+  # intra-strain infection effect - what's differentially expressed in both low and high of same treatment compared to vehicle
+  PAO1vLB = (PAO1.high+PAO1.low)/2-LB.vehicle,
+  pqsRvLB = (pqsR.high+pqsR.low)/2-LB.vehicle,
+  # intra-strain dose comparison
+  PAO1_highVlow = PAO1.high-PAO1.low,
+  pqsR_highVlow = pqsR.high-pqsR.low,
+  # inter-strain same-dose comparison
+  PAO1vpqsR_high = PAO1.high-pqsR.high,
+  PAO1vpqsR_low = PAO1.low-pqsR.low,
+  # inter-strain diff-dose comparison - may be unnecessary
+  PAO1_highvpqsR.low = PAO1.high-pqsR.low,
+  PAO1_lowvpqsR.high = PAO1.low-pqsR.high,
+levels=s2c$group)
+saveRDS(contrasts, file = paste0(Robjectsdir, "/contrasts.rds"))
+```
+
+
+```{r building logCPM and avlogCPM}
+#####
+#> To change:
+#> - modify assignment of group_names to match data at hand
+#> - modify number of samples to average over (i.e. number of samples per condition) in avlogCPM calculation
+#> 
+#> The logCPM values are important for visual representation of transcript expression, while avlogCPM gives the average of each transcript's logCPM values over all the biological repeats in the same condition. The values from avlogCPM are used in functions (initialized in DE graphs and later scripts) to output tabled expression and fold-change information of a user-chosen transcript or set of transcripts.
+#####
+
+## converting counts to log2 counts per million into new matrix with sample names as column titles and transcript names as row titles
+logCPM <- cpm(y, prior.count=2, log=TRUE) # prior.count is avg count to be added to each observation to not take the log of zero. default is 2
+# building log2cpm with row names as associated gene names and column names as sample names
+rownames(logCPM) <- y$genes[["ens_gene"]] # this is where wrong ordering of the t2ged/annot table becomes apparent
+colnames(logCPM) <- s2c$sample
+saveRDS(logCPM, file = paste0(Robjectsdir, "/logCPM.rds"))
+# retrieving group names from contrasts matrix and reordering to match logCPM column name order
+group_names <- rev(rownames(contrasts)) # contrast names bc I can then use contrast to search in avlogCPM
+group_names <- group_names[c(1,2,3,4,5)] # reordering to match logCPM order
+# seq iterates i from 1 to 48 by 4. lapply takes i and applies rowMeans over i:i+4,
+# meaning that rowMeans calculates the mean of each row using the 4 values in the range i:i+3
+avlogCPM <- as.data.frame(lapply(seq(1, dim(logCPM)[2], by = 5), function(i) {
+  rowMeans(logCPM[, i:(i+4)], na.rm = TRUE)
+}))
+# Renaming the columns according to the sample group they represent
+colnames(avlogCPM) <- group_names
+saveRDS(avlogCPM, file = paste0(Robjectsdir, "/avlogCPM.rds"))
+```
