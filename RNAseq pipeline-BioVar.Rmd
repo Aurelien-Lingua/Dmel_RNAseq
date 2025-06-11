@@ -5,269 +5,41 @@ date: "2025-05-07"
 output: html_document
 ---
 
-
-
-### RNAseq R code setup, loading useful functions and file sources, as well as s2c and t2g matrices 
-
-```{r R environment setup, warning=FALSE}
-#####
-#> To change:
-#> - modify rootdir to desired rootdir path if not using current working directory
-#> - modify datapath to where quantification folders are held
-#####
-
-# Clean environment 
-rm(list = ls(all.names = TRUE)) # will clear all objects including hidden objects
-gc() # free up memory and report the memory usage
-
-### ENTER ROOT DIR PATH BELOW, or keep the renv/project rootdir
+```{r}
+### Directories needed for this file
 rootdir <- getwd()
-# make Robject folder to hold all Robjects
-if (!dir.exists(file.path(rootdir, "Robjects"))) {
-  dir.create(file.path(rootdir, "Robjects"))
-}
 Robjectsdir <- paste0(rootdir, "/Robjects")
-# make graphs directory to hold all graph folders
-if (!dir.exists(file.path(rootdir, "graphs"))) {
-  dir.create(file.path(rootdir, "graphs"))
-}
-Graphsdir <- paste0(rootdir, "/graphs")
-# make biovariation graph folder
-if (!dir.exists(file.path(Graphsdir, "BioVar"))) {
-  dir.create(file.path(Graphsdir, "BioVar"))
-}
-# Saving directory names for use in scripts
 BVdir <- paste0(Graphsdir, "/BioVar")
-
-### ENTER PATH WITH KALLISTO FOLDERS BELOW
-datapath <- "C://Users/Aurelien/OneDrive - Queen Mary, University of London/Documents/Experimental data analysis/RNAseq_pipeline/input/"
-
-# sample names for all samples
-sample_list <- dir(file.path(datapath))
-# paths to each kallisto folder for each processed sample
-kal_dirs <- file.path(datapath, sample_list)
-# abundance file paths for tximport
-abundance_files_all <- file.path(datapath,sample_list, "abundance.h5")
-names(abundance_files_all) <- sample_list
 
 #setting root directory
 knitr::opts_knit$set(root.dir = rootdir)
 # options(max.print = .Machine$integer.max, scipen = 999, stringsAsFactors = F, dplyr.summarise.inform = F) # avoid truncated output in R console and scientific notation
 # Set seed to ensure reproducibility in any function sthat require randomness
 set.seed(123456)
-
 suppressMessages({
   library(edgeR)    # for DGE analysis
   library(pheatmap) # for heatmap graphs
-  library(dplyr)    # for useful modification functions of dataframes, lists, etc
-  library(data.table)      # to reorder the t2ged matrix
-  library(clusterProfiler) # ORA/GSEA
-  library(org.Dm.eg.db)    # Dmel db for GO terms/Kegg pathways
-  library(DOSE)            # for some graphing functions (facet_grid)
-  library(enrichplot)      # Graphing functions (pairwise_termsim)
   library(ggplot2)  # graphing module
-  library(pathview) # to produce pathview plots of KEGG pathways with enriched genes/transcripts 
-  library(cowplot)
-  #library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
   library(RColorBrewer) # for a colourful plot
   library(ggrepel) # for nice annotations
-  library(cluster)         # for PAM clustering function
-  library(factoextra)      # for the various graphing methods in finding optimal k number
-  library(openxlsx) # to save enrichment analysis results
-  library(forcats) # to reverse order of factor for avglogCPM function
-  library(tximport)
-})
+  })
 ```
 
-
-```{r making t2g file}
-#####
-#> To change:
-#> - Rebuild t2g if newer ensembl release version available AND quantification files were made with the new genome.
-#####
-
-#####
-# building transcript to gene datatable with gene IDs (ensembl, entrez), and transcript IDs, of all Dmel genes
-# loading t2g object after having built it once.
-if(file.exists(paste0(Robjectsdir, "/t2g_dmel.rds"))){
-  t2g <- readRDS(paste0(Robjectsdir, "/t2g_dmel.rds"))
-}else{
-  # gets information from the Dmel gene dataset. The transcript id, ensembl gene id, and
-  # external gene id are collated together into the returned transcript-to-gene matrix.
-  mart <- biomaRt::useMart(biomart = "ensembl", dataset = "dmelanogaster_gene_ensembl")
-	# modify this to choose what information to grab from ensembl and external (flybase) databases. see mart@attributes[["name"]] to view options
-  t2g <- biomaRt::getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id", "external_gene_name","entrezgene_id","description", "transcript_biotype"), mart = mart)
-	t2g <- dplyr::rename(t2g, target_id = ensembl_transcript_id,
-	              ens_gene = ensembl_gene_id,
-	              ext_gene = external_gene_name,
-	              entrez_gene = entrezgene_id)
-	# modify this to choose the IDs and info you want to keep in t2g
-	t2g <- dplyr::select(t2g, c('target_id', 'ens_gene', 'ext_gene', "entrez_gene"))
-# saveRDS(object = t2g, file = paste0(Robjectsdir, "/t2g_dmel.rds"))
+```{r loading relevant values}
+if (!exists("y")){
+  y <- readRDS(file = paste0(Robjectsdir, "/y.rds"))
 }
-
-
-
-```
-
-```{r Building s2c and design matrix, include=FALSE}
-#####
-#> To change:
-#> - Construct new sample 2 covariate (s2c) matrix with the current experiment design
-#> - save new s2c matrix into robjectsdir
-#> - modify timepoint-specific sample lists accordingly. These lists are just to simplify working with separate timepoints, which matters for example when looking at biological variation, or when you are currently only interested in one timepoint.
-#####
-
-
-# Preparing sample to covariate (factors really) matrix to inform model design.
-# This needs to be customized to the dataset and sample groups. Below is a previous example, modify accordingly.
-if(file.exists(paste0(Robjectsdir, "/s2c.rds"))){
-  s2c <- readRDS(paste0(Robjectsdir, "/s2c.rds"))
+if (!exists("s2c")){
+  s2c <- readRDS(file = paste0(Robjectsdir, "/s2c.rds"))
   design <- s2c$design
-}else{
-  # Reordering samples to have uninfected W1118 samples first as controls.
-  sample_list <- sort(sample_list, decreasing = TRUE)
-  # Creating samples to covariates matrix, with the three factors from the experiment design
-  s2c <- data.frame(sample=sample_list, timepoint = rep(c("6h", "48h"), each=4), treatment = rep(c("Unin", "U112", "PBS"), each=16), host = rep(c("W1118", "IMD"), each=8), kal_dirs = kal_dirs, stringsAsFactors=FALSE)
-  # Combining all factors into group to create design matrix.
-  group <- paste(s2c$host, s2c$treatment, s2c$timepoint, sep=".")
-  s2c$group <- factor(group)
-  # Creating means model design matrix with appropriate labels.
-  design <- model.matrix(~0+group)
-  colnames(design) <- levels(factor(group))
-  # Adding matrix to s2c dataframe
-  s2c$design <- design
-  saveRDS(object = s2c, file = paste0(Robjectsdir, "/s2c.rds"))
 }
-
-# separate timepoint sample vectors if you want to work with the timepoints separately e.g. when looping a function/code snippet. 
-samples_6h <- s2c$sample[s2c$timepoint=="6h"]
-samples_48h <- s2c$sample[s2c$timepoint=="48h"]
-
-
-```
-
-### Creating DGElist object with read counts
-
-```{r Loading Kallisto counts - transcript and gene-level}
-if(file.exists(paste0(Robjectsdir, "/y_trans.rds"))){
-  y_trans <- readRDS(paste0(Robjectsdir, "/y_trans.rds"))
-}else{
-  # CatchKallisto method from Pedro L Baldoni, et al., 2023 (https://doi.org/10.1093/nar/gkad1167)
-  # Method uses bootstrap samples to estimate an overdispersion parameter per 
-  # transcript, representing the variance from the ambiguity of assigning 
-  # sequence reads to transcripts. 
-  kallisto_transcripts <- catchKallisto(paths = s2c$kal_dirs, verbose = FALSE)
-  # getting transcript counts scaled to the overdispersion parameters
-  cts.scaled <- kallisto_transcripts$counts/kallisto_transcripts$annotation$Overdispersion
-  # taking all transcripts in my reads to get the associated ensembl and gene name for each
-  transcripts <- rownames(kallisto_transcripts$annotation)
-  # using %in% operator which literally is made for when you want to check that one element or list of elements belongs to a DF. Taking only the gene name column from t2g
-  t2ged <- t2g[t2g$target_id %in% transcripts & !duplicated(t2g$target_id),]
-  #Warning: this removes duplicates, i.e. only gives one row of IDs for each transcript (2248 transcripts duplicates exist where they map to multiple gene IDs).
-  
-  #!!! INCREDIBLY IMPORTANT PART => REORDER t2ged IN THE SAME ORDER AS THE COUNTS MATRIX, SO TRANSCRIPTS ARE LINKED TO THE CORRECT GENE IDS
-  # Turning t2ged into data.table object
-  t2ged <- as.data.table(t2ged)
-  # reordering t2ged by same order as kallisto counts object through transcript col
-  t2ged<-t2ged[order(factor(t2ged$target_id,levels = rownames(cts.scaled)))]
-  # building up annotation matrix
-  kallisto_transcripts$annotation[["TranscriptID"]] <- t2ged[[1]]
-  kallisto_transcripts$annotation[["flybaseID"]] <- t2ged[[2]]
-  kallisto_transcripts$annotation[["ext_gene"]] <- t2ged[[3]]
-  kallisto_transcripts$annotation[["ENTREZID"]] <- as.character(t2ged[[4]])
-  # Creating annotation dataframe to be entered in DGEList y
-  annot <- kallisto_transcripts$annotation[4:7]
-  # making DGEList object for analysis, with scaled counts, sample names, gene annotations
-  y_trans <- DGEList(counts = cts.scaled, samples = s2c$sample, genes = annot)
-  # Tidying up names
-  rownames(y_trans$samples)<- s2c$sample
-  colnames(y_trans$counts) <- s2c$sample
-  
-  # Applying edgeR's filterByExpr
-  keep <- filterByExpr(y_trans, design = s2c$design)
-  summary(keep)
-  # More precisely, the filtering keeps genes that have CPM >= CPM.cutoff in MinSampleSize samples, where CPM.cutoff = min.count/median(lib.size)*1e6 and MinSampleSize is the smallest group sample size or, more generally, the minimum inverse leverage computed from the design matrix.
-  # If all the group samples sizes are large, then the above filtering rule is relaxed slightly. If MinSampleSize > large.n, then genes are kept if CPM >= CPM.cutoff in k samples where k = large.n + (MinSampleSize - large.n) * min.prop. This rule requires that genes are expressed in at least min.prop * MinSampleSize samples, even when MinSampleSize is large.
-  # 
-  # In addition, each kept gene is required to have at least min.total.count reads across all the samples.
-  # edgeR defaults: min.count = 10, min.total.count = 15, large.n = 10, min.prop = 0.7
-  y_trans <- y_trans[keep, , keep.lib.sizes = FALSE]
-  y_trans <- calcNormFactors(y_trans)
-  saveRDS(y_trans, file = paste0(Robjectsdir, "/y_trans.rds"))
+if (!exists("logCPM")){
+  logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
+  avlogCPM <- readRDS(file = paste0(Robjectsdir, "/avlogCPM.rds"))
 }
-if(file.exists(paste0(Robjectsdir, "/y_gene.rds"))){
-  y_gene <- readRDS(paste0(Robjectsdir, "/y_gene.rds"))
-}else{
-  # Need to account for possible length bias in counts, which function does if 
-  # called with countsFromAbundance = "lengthScaledTPM".
-  # this is “bias corrected counts without an offset”.
-  # the function will output gene-level (aggregated transcript-level) information
-  txi.gene <- tximport(abundance_files_all, type = "kallisto", tx2gene = t2g, countsFromAbundance = "lengthScaledTPM")
-  # same as above but for tximport method, which aggregates transcripts to gene-level estimation, with Fbgn flybase IDs as names.
-  flygenes <- rownames(txi.gene$counts)
-  t2ged <- t2g[t2g$ens_gene %in% flygenes & !duplicated(t2g$ens_gene),]
-  # Creating annotation dataframe to be entered in DGEList y
-  # Turning t2ged into data.table object
-  t2ged <- as.data.table(t2ged)
-  # reordering t2ged by same order as kallisto counts object through transcript col
-  t2ged<-t2ged[order(factor(t2ged$ens_gene,levels = flygenes))]
-  annot <- t2ged
-  # adding sample information to dataframe
-  txi.gene$sample <- s2c$sample
-  # reordering counts matrix columns to follow above design.
-  txi.gene$counts <- txi.gene$counts[, s2c$sample]
-  #since importing using tximport option 'lengthScaledTPM', the counts are already bias corrected without offset and can be used as the gene-level counts matrix as-is.
-  
-  y_gene <- DGEList(counts = txi.gene$counts, samples = s2c$sample, genes = annot)
-  rownames(y_gene$samples)<- s2c$sample
-  colnames(y_gene$counts) <- s2c$sample
-  
-  keep <- filterByExpr(y_gene, design = s2c$design)
-  summary(keep)
-  # More precisely, the filtering keeps genes that have CPM >= CPM.cutoff in MinSampleSize samples, where CPM.cutoff = min.count/median(lib.size)*1e6 and MinSampleSize is the smallest group sample size or, more generally, the minimum inverse leverage computed from the design matrix.
-  # If all the group samples sizes are large, then the above filtering rule is relaxed slightly. If MinSampleSize > large.n, then genes are kept if CPM >= CPM.cutoff in k samples where k = large.n + (MinSampleSize - large.n) * min.prop. This rule requires that genes are expressed in at least min.prop * MinSampleSize samples, even when MinSampleSize is large.
-  # 
-  # In addition, each kept gene is required to have at least min.total.count reads across all the samples.
-  # edgeR defaults: min.count = 10, min.total.count = 15, large.n = 10, min.prop = 0.7
-  y_gene <- y_gene[keep, , keep.lib.sizes = FALSE]
-  y_gene <- calcNormFactors(y_gene)
-  saveRDS(y_gene, file = paste0(Robjectsdir, "/y_gene.rds"))
+if (!exists("contrasts")){
+  contrasts <- readRDS(file = paste0(Robjectsdir, "/contrasts.rds"))
 }
-# change this if you want to change transcript-level to gene-level
-y <- y_gene
-```
-
-
-```{r building logCPM and avlogCPM}
-#####
-#> To change:
-#> - modify assignment of group_names to match data at hand
-#> - modify number of samples to average over (i.e. number of samples per condition) in avlogCPM calculation
-#> 
-#> The logCPM values are important for visual representation of transcript expression, while avlogCPM gives the average of each transcript's logCPM values over all the biological repeats in the same condition. The values from avlogCPM are used in functions (initialized in DE graphs and later scripts) to output tabled expression and fold-change information of a user-chosen transcript or set of transcripts.
-#####
-
-# converting counts to log2 counts per million into new matrix with sample names as column titles and transcript names as row titles
-logCPM <- cpm(y, prior.count=2, log=TRUE) # prior.count is avg count to be added to each observation to not take the log of zero. default is 2
-# building log2cpm with row names as associated gene names and column names as sample names
-rownames(logCPM) <- y$genes[["ens_gene"]] # Ensured values link to correct transcript, see 1 NOV 24 log entry
-colnames(logCPM) <- s2c$sample
-saveRDS(logCPM, file = paste0(Robjectsdir, "/logCPM.rds"))
-# retrieving group names from contrasts matrix and reordering to match logCPM column name order
-group_names <- rev(rownames(contrasts)) # contrast names bc I can then use contrast to search in avlogCPM
-group_names <- group_names[c(1,2,7,8,3,4,9,10,5,6,11,12)] # reordering to match logCPM order
-# seq iterates i from 1 to 48 by 4. lapply takes i and applies rowMeans over i:i+4,
-# meaning that rowMeans calculates the mean of each row using the 4 values in the range i:i+3
-avlogCPM <- as.data.frame(lapply(seq(1, dim(logCPM)[2], by = 4), function(i) {
-  rowMeans(logCPM[, i:(i+3)], na.rm = TRUE)
-}))
-# Renaming the columns according to the sample group they represent
-colnames(avlogCPM) <- group_names
-saveRDS(avlogCPM, file = paste0(Robjectsdir, "/avlogCPM.rds"))
-
-
-
 ```
 
 ### Making MDS plots, heatmap(s), and BCV plots to ensure biological variation is fine
@@ -294,9 +66,11 @@ dev.copy2pdf(file = paste0(BVdir, "/MDS_all_named.pdf"))
 
 # making axes labels from data in MDSplot object. 
 # setting up plot customizations depending on sample list size
-cols = c(rep("grey",8), rep("red",8))
-shapes <- rep(rep(c(0,15,1,19,2,17), each=4),2)
-shapes <- c(rep(rep(c(0,15),each=4),2),rep(rep(c(1,19),each=4),2),rep(rep(c(2,17),each=4),2))
+# grey-vehicle,red-PAO1,blue-pqsR 
+cols = c(rep("grey",5), rep("red",10),rep("blue",10)) 
+# square-vehicle, filled lozenge-highdose, empty lozenge-lowdose
+shapes <- c(rep(0,5), rep(c(17,2),each=5,times=2)) 
+group_legend <- c(c(pch=0,col="grey"), c(rep(c(pch=17,col="red"),2)),c(rep(c(pch=2,col="blue"),2)))
 title <- "MDS plot of all samples"
 fname <- paste0(BVdir, "/MDS_all.pdf")
 # setting up plot parameters and options
@@ -310,71 +84,19 @@ plot(mds, xlab = xlab, ylab = ylab)
 # setting colour for plot background
 rect(par("usr")[1], par("usr")[3], par("usr")[2], par("usr")[4], col = "honeydew")
 # writing points onto plot, with relevant colours and shapes
-points(mds, col = cols, pch = shapes)
+points(mds, col = cols, pch = shapes,bg="black")
 print(shapes)
 # add legends and title. Inset specifies legend location
-legend('topright', 
-       col="black",
-       inset=c(-0.13,0), 
-       legend=unique(s2c$treatment), 
-       pch = c(0,1,2), cex = 0.7, bg = "honeydew")
-legend('bottomright', 
-       fill = unique(cols), 
-       inset=c(-0.165,0), 
-       legend=unique(s2c$host), cex = 0.7, bg = "honeydew")
-legend("right", 
-       inset=c(-0.115,0), 
-       legend=unique(s2c$timepoint), pch = c(1,19), cex = 0.7, bg = "honeydew")
+legend('topright',
+       title = c(as.expression(bquote(bold("Treatment and dose")))),
+       inset=c(-0.3,0), 
+       legend=c("Vehicle","PAO1 high-dose","PAO1 low-dose","PAO1ΔpqsR high-dose","PAO1ΔpqsR low-dose"), 
+       pch=c(0,24,2,24,2),
+       col = c("grey","red","red","blue","blue"),
+       pt.bg = c("grey","red","grey","blue","grey"),
+       cex = 0.7, bg = "honeydew")
 title(title)
 dev.copy2pdf(file = fname)
-
-
-### MDS for samples at Xh 
-#> - modify accordingly and copy/paste for number of timepoints or groups to explore
-#> - remember to modify filenames to avoid overwriting anything before saving
-# # producing MDSplot object, that calculates variances between samples' transcript expression data
-# mds <- plotMDS(y, top = 500, labels = rownames(y$samples), dim.plot = c(1,2), var.explained = TRUE)
-# # saving base MDS plot that uses the name of each sample as their point on the graph.
-# dev.copy2pdf(file = paste0(BVdir, "/NEWNAME"))
-#   # top 500 'genes' to use for calculating pairwise distances.
-#   # dim.plot 1,2 to graph over PC1 and PC2. var.explained true adds percentage of variation
-#   # each principle component accounts for on their respective axis title.
-# 
-# # making axes labels from data in MDSplot object. 
-# # setting up plot customizations depending on sample list size
-# cols = c(rep("grey",8), rep("red",8))
-# shapes <- rep(rep(c(0,15,1,19,2,17), each=4),2)
-# shapes <- c(rep(rep(c(0,15),each=4),2),rep(rep(c(1,19),each=4),2),rep(rep(c(2,17),each=4),2))
-# title <- "MDS plot of all samples"
-# fname <- paste0(BVdir, "/NEWNAME.pdf")
-# # setting up plot parameters and options
-# # writing variance percentage of respective pc through rounding value to 2 digits and converting to percentage notation
-# xlab = paste0(mds[["axislabel"]]," 1 (", scales::label_percent()(round(mds[["var.explained"]][1], digits= 2)),")")
-# ylab = paste0(mds[["axislabel"]]," 2 (", scales::label_percent()(round(mds[["var.explained"]][2], digits= 2)),")")
-# # Options below initializes plot parameters. It adds margin to the right of the plot to allow for legends to be written outside of the graph
-# par(xpd=T, mar=par()$mar+c(0,0,0,6))
-# # using plot function to allow for more customization. plot initial plot with axes labels
-# plot(mds, xlab = xlab, ylab = ylab)
-# # setting colour for plot background
-# rect(par("usr")[1], par("usr")[3], par("usr")[2], par("usr")[4], col = "honeydew")
-# # writing points onto plot, with relevant colours and shapes
-# points(mds, col = cols, pch = shapes)
-# print(shapes)
-# # add legends and title. Inset specifies legend location
-# legend('topright', 
-#        col="black",
-#        inset=c(-0.13,0), 
-#        legend=unique(s2c$treatment), 
-#        pch = c(0,1,2), cex = 0.7, bg = "honeydew")
-# legend('bottomright', 
-#        fill = unique(cols), 
-#        inset=c(-0.165,0), 
-#        legend=unique(s2c$host), cex = 0.7, bg = "honeydew")
-# legend("right", 
-#        inset=c(-0.115,0), 
-#        legend=unique(s2c$timepoint), pch = c(1,19), cex = 0.7, bg = "honeydew")
-# title(title)
-# dev.copy2pdf(file = fname)
 
 ```
 
@@ -385,11 +107,6 @@ dev.copy2pdf(file = paste0(BVdir, "/BCV_plot_all.pdf"))
 ```
 
 ```{r heatmaps}
-#####
-#> To change:
-#> - uncomment and modify extra correlation matrices for groups of interest
-#>
-#####
 
 # Visualization of correlation of sample groups through their transcript expression values. To accommodate for large variances in transcript expression even with normalization, the values correlated are log2 of their counts per million, calculated previously as logCPM dataframe is used in other sections as well.
 grouping <- s2c[,2:4]
@@ -402,15 +119,6 @@ pheatmap(allCors,
          clustering_distance_rows = "correlation",
          clustering_distance_cols = "correlation",
          filename = paste0(BVdir, "/Heatmap_all_samples.pdf"))
-
-# # making correlation marices for varying groups to compare
-# Cors_48h <- cor(logCPM[,colnames(logCPM) %in% samples_48h], method="pearson", use="pairwise.complete.obs")
-# Cors_6h <- cor(logCPM[,colnames(logCPM) %in% samples_6h], method="pearson", use="pairwise.complete.obs")
-# grouping_48h <- grouping[2:3][rownames(grouping)%in% samples_48h,]
-# grouping_6h <- grouping[2:3][rownames(grouping)%in% samples_6h,]
-# pheatmap(Cors_6h, annotation_col = grouping_6h, show_rownames = FALSE,clustering_distance_cols = "correlation",clustering_distance_rows = "correlation")
-# pheatmap(Cors_48h, annotation_col = grouping_48h, show_rownames = FALSE,clustering_distance_cols = "correlation",clustering_distance_rows = "correlation")
-
 ```
 
 ```{r fitting model}
@@ -419,34 +127,3 @@ fit <- glmQLFit(y, s2c$design, robust=TRUE)
 plotQLDisp(fit)
 saveRDS(fit, file = paste0(Robjectsdir, "/fit.rds"))
 ```
-
-### Producing graphs for ORA/GSEA results, with option for individual contrast or looping over all contrasts
-
-```{r}
-
-```
-
-
-
-### Currently unused code
-
-```{r}
-### If separate loading of quantifications depending on timepoint/other is desired, modify and uncomment below
-# # sample names for samples at 6h - used for abundance files and such, replaces after with array of different ordering
-# samples_6h = list.files(datapath, pattern="*_6h_[0-9]{1}")
-# # sample names for samples at 48h
-# samples_48h = list.files(datapath, pattern="*_48h_[0-9]{1}")
-# # Directory list for kallisto files.
-# # getting abundance hdf5 file paths for each grouping (6h, 48h, all)
-# abundance_files_48h <- file.path(datapath,samples_48h, "abundance.h5")
-# # assign sample name to its respective abundance file filepath
-# names(abundance_files_48h) <- samples_48h
-# check that sample name is assigned to the correct filepath, for each array
-# abundance_files_48h
-# abundance_files_6h <- file.path(datapath,samples_6h, "abundance.h5")
-# names(abundance_files_6h) <- samples_6h
-# abundance_files_6h
-# abundance_files_all
-
-```
-
