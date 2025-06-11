@@ -67,60 +67,12 @@ if (!exists("t2g")){
 if (!exists("logCPM")){
   logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
 }
+if (!exists("contrasts")){
+  contrasts <- readRDS(file = paste0(Robjectsdir, "/contrasts.rds"))
+}
 
 
 
-
-```
-
-
-
-### Creating Contrast matrix containing all required contrasts to do DGE on
-
-```{r Building contrasts matrix}
-#####
-#> To change:
-#> - modify the contrasts matrix with all contrasts to potentially explore.
-#> This section is very important as you are building the totality of contrasts to explore differential expression in. The contrasts matrix is later used for differential expression analysis, enrichment analysis, and to loop through other functions, as well as to label filenames and graphs with the contrast their data belongs to. 
-#>
-#####
-#Building into one matrix for ease of use
-contrasts <- makeContrasts(
-  # Intra-host infection and injection contrasts
-  WT_Inf_6h = W1118.U112.6h-W1118.PBS.6h,
-  WT_Inf_48h = W1118.U112.48h-W1118.PBS.48h,
-  WT_PBS_6h = W1118.PBS.6h-W1118.Unin.6h,
-  WT_PBS_48h = W1118.PBS.48h-W1118.Unin.48h,
-  IMD_Inf_6h = IMD.U112.6h-IMD.PBS.6h,
-  IMD_Inf_48h = IMD.U112.48h-IMD.PBS.48h,
-  IMD_PBS_6h = IMD.PBS.6h-IMD.Unin.6h,
-  IMD_PBS_48h = IMD.PBS.48h-IMD.Unin.48h,
-  # intra-host inf vs uninf
-  WT_Inf_6h_nopbs = W1118.U112.6h-W1118.Unin.6h,
-  WT_Inf_48h_nopbs = W1118.U112.48h-W1118.Unin.48h,
-  IMD_Inf_6h_nopbs = IMD.U112.6h-IMD.Unin.6h,
-  IMD_Inf_48h_nopbs = IMD.U112.48h-IMD.Unin.48h,
-  
-  # Inter-host infection and injection contrasts
-  Inf_IMDvsWT_48h = (IMD.U112.48h-IMD.PBS.48h)-(W1118.U112.48h-W1118.PBS.48h),
-  Inf_IMDvsWT_6h = (IMD.U112.6h-IMD.PBS.6h)-(W1118.U112.6h-W1118.PBS.6h),
-  PBS_IMDvsWT_48h = (IMD.PBS.48h-IMD.Unin.48h)-(W1118.PBS.48h-W1118.Unin.48h),
-  PBS_IMDvsWT_6h = (IMD.PBS.6h-IMD.Unin.6h)-(W1118.PBS.6h-W1118.Unin.6h),
-  # time-independent intra-host contrasts
-  # IMD_inf =
-  # uninfected contrasts
-  Uninf_IMDvsWT_6h = IMD.Unin.6h-W1118.Unin.6h,
-  Uninf_IMDvsWT_48h = IMD.Unin.48h-W1118.Unin.48h,
-  IMD_Uninf = IMD.Unin.48h-IMD.Unin.6h,
-  WT_Uninf = W1118.Unin.48h-W1118.Unin.6h,
-  # Time contrasts. Negative LFC means expression goes down over time, positive means it goes up
-  WT_Inf = W1118.U112.48h-W1118.U112.6h,
-  WT_PBS = W1118.PBS.48h-W1118.PBS.6h,
-  IMD_Inf = IMD.U112.48h-IMD.U112.6h,
-  IMD_PBS = IMD.PBS.48h-IMD.PBS.6h,
-levels=s2c$group)
-
-saveRDS(contrasts, file = paste0(Robjectsdir, "/contrasts.rds"))
 ```
 
 ### Running DGE analysis, producing relevant graphs, and saving data to Robject file
@@ -131,7 +83,11 @@ Using glmTreat function to perform Differential expression testing with a log-fo
 ```{r DE testing}
 #####
 #> To change:
-#> - After getting the final number of DE transcripts for each contrast, determine if a significance cut-off is desired. 
+#> - After getting the final number of DE transcripts for each contrast, determine if a significance cut-off is desired.
+#> - ADD ANOVA to view what is uniquely DE between LB, high, and low for PAO1 or pqsR, and all groups FIGURE OUT HOW TO INTEGRATE SINCE NOW CONTRASTS MATRIX DOESN'T HAVE ALL CONTRASTS - may need to rebuid the lookup functions since they are based on contrasts matrix.
+# ANOV_PAO1  <- glmQLFTest(fit, coef = 2:3)
+# ANOV_pqsR  <- glmQLFTest(fit, coef=4:5)
+# ANOV_all  <- glmQLFTest(fit, coef=2:5)
 #> Remember that any cut-off will bias the resulting significantly DE transcripts for transcripts with potentially low overall expression but relatively high differences in expression in the contrast. Transcripts with higher average expression will need larger increase/decrease in absolute expression values in the contrast to pass the filter, which can hide DE transcripts of genes that are usually highly expressed. But also, getting very large number of DE transcripts (in proportion to total number of transcripts in genome/counts) does inform the need for a cut-off.
 #>
 #####
