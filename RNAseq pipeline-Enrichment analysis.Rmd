@@ -4,21 +4,14 @@ output: html_notebook
 ---
 
 ```{r}
+#####
+#> TO CHANGE
+#> - modify filenames to which ORA and GSEA are saved, according to if its glmQL or Treat
+#> - Currently, ORA and GSEA for GO terms is for all three ontologies. Change 'ont = all' to 'BP', CC, or MF, if separation is desired.
+#####
 ### ENTER ROOT DIR PATH BELOW, or keep the renv/project rootdir
 rootdir <- getwd()
 Robjectsdir <- paste0(rootdir, "/Robjects")
-Graphsdir <- paste0(rootdir, "/graphs")
-# make ORA graph folder
-
-
-
-### ENTER PATH WITH KALLISTO FOLDERS BELOW
-datapath <- paste0(rootdir, "/input")
-
-# sample names for all samples
-sample_list <- dir(file.path(datapath))
-# paths to each kallisto folder for each processed sample
-kal_dirs <- file.path(datapath, sample_list)
 
 #setting root directory
 knitr::opts_knit$set(root.dir = rootdir)
@@ -26,32 +19,18 @@ knitr::opts_knit$set(root.dir = rootdir)
 # Set seed to ensure reproducibility in any function sthat require randomness
 set.seed(123456)
 suppressMessages({
-  library(edgeR)    # for DGE analysis
-  library(pheatmap) # for heatmap graphs
-  library(dplyr)    # for useful modification functions of dataframes, lists, etc
-  library(data.table)      # to reorder the t2ged matrix
   library(clusterProfiler) # ORA/GSEA
   library(org.Dm.eg.db)    # Dmel db for GO terms/Kegg pathways
   library(DOSE)            # for some graphing functions (facet_grid)
   library(enrichplot)      # Graphing functions (pairwise_termsim)
   library(ggplot2)  # graphing module
-  library(pathview) # to produce pathview plots of KEGG pathways with enriched genes/transcripts 
-  library(cowplot)
-  #library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
-  library(RColorBrewer) # for a colourful plot
-  library(ggrepel) # for nice annotations
-  library(cluster)         # for PAM clustering function
-  library(factoextra)      # for the various graphing methods in finding optimal k number
   library(openxlsx) # to save enrichment analysis results
-  library(forcats) # to reverse order of factor for avglogCPM function
-  library(tximport)
 })
 ```
 
+
 ```{r loading relevant values}
-if (!exists("t2g")){
-  t2g <- readRDS(file = paste0(Robjectsdir, "/t2g_dmel.rds"))
-}
+
 if (!exists("y")){
   y <- readRDS(file = paste0(Robjectsdir, "/y_gene.rds"))
   if (dim(y$counts)[1]<20000){
@@ -73,22 +52,14 @@ if (!exists("y")){
     t2ged<-t2ged[order(factor(t2ged$target_id,levels = rownames(cts.scaled)))]
   }
 }
-if (!exists("fit")){
-  fit <- readRDS(file = paste0(Robjectsdir, "/fit.rds"))
-}
-if (!exists("s2c")){
-  s2c <- readRDS(file = paste0(Robjectsdir, "/s2c.rds"))
-  design <- s2c$design
-}
 
-if (!exists("logCPM")){
-  logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
-}
 if (!exists("glmQL_res")){
   glmQL_res <- readRDS(file = paste0(Robjectsdir, "/glmQL_res_txi.rds"))
   glmQL_decided <- readRDS(file = paste0(Robjectsdir, "/glmQL_decided_txi.rds"))
   Treat_res <- readRDS(file = paste0(Robjectsdir, "/Treat_res_txi.rds"))
   Treat_decided <- readRDS(file = paste0(Robjectsdir, "/Treat_decided_txi.rds"))
+  QL_res <- glmQL_res
+  QL_decided <- glmQL_decided
 }
 if (!exists("contrasts_list")){
   contrasts_list <- readRDS(file = paste0(Robjectsdir, "/contrasts.rds"))
@@ -98,273 +69,16 @@ if (!exists("contrasts_list")){
 ```
 
 
-```{r R setting up functions, warning=FALSE}
-
-.hunt <- function(x = "geneID", contrast){
-  found <- t2ged[t2ged$target_id %in% "empty",]
-  # looping until the entry is found in t2ged
-  while(dim(found)[1]==0){
-    # separating IDs if a list was given
-    if(length(x)==1){
-      if(grepl("/",x)|grepl(" ",x)){
-        try(x <- strsplit(x, "/"))
-        try(x <- strsplit(x, " "))
-        x <- unlist(x)
-      }
-    }
-    if (grepl("FBtr",x[[1]],fixed = TRUE)){
-      found <- t2ged[t2ged$target_id %in% x,]
-    } else if (grepl("FBgn",x[[1]],fixed = TRUE)){
-      found <- t2ged[t2ged$ens_gene %in% x,]
-    } else if (x[[1]] %in% t2ged$entrez_gene){              
-      found <- t2ged[t2ged$entrez_gene %in% x,]
-    } else if (x[[1]] %in% t2ged$ext_gene){
-      found <- t2ged[t2ged$ext_gene %in% x,]
-    } else {
-      cat("Please enter either a gene ID in the form of transcript id (FBtrxx), flybase gene ID (Fbgnxxx), gene symbol (e.g. pug), or entrezID (numbers):")
-      x<- readline()
-    }
-  }
-  # getting contrast values for each gene
-  temp_table <- glmQL_decided[[contrast]]$table[glmQL_decided[[contrast]]$table$target_id %in% found$target_id,]
-  # reordering the table to follow found's order, so values are correctly assigned
-  # temp_table<-temp_table[order(factor(temp_table, levels = found$ens_gene)),]
-  found <- temp_table[!duplicated(temp_table$ens_gene),]
-  return(found)
-}
-
-# function saves the Flybase gene IDs in found object for batch search on flyatlas
-FBgns_save <- function(){
-  label <- paste0(length(found$ens_gene),"_",gsub(":",".",Sys.time()))
-  
-  write.csv(found$ens_gene, 
-            quote = FALSE, 
-            file = paste0("C:/Users/Aurelien/Expansion/proj28/plots/tximport plots/batch_searches/",
-                          label,".csv"))
-  
-}
-# Call function to assign the contrast of interest.
-wcontrast <- function(x = 404){
-  x<-as.integer(x)
-  num_c <- dim(contrasts_list)[2]
-  message <- paste("Please enter a number between 1 to",num_c,"to choose your contrast. Below are the contrast options:\n")
-  for (j in 0:3){  # Iterate over the 4 lines
-    for (i in seq(1 + j, num_c, by = 4)){  # Print contrasts_list separated by 4
-      message <- paste0(message, i, " - ", names(glmQL_res)[i], "\t")
-    } 
-    message <- paste0(message, "\n")
-  }
-  while ( x > num_c| x < 1| is.na(x)){
-    cat(message)
-    x<- as.integer(readline())
-  }
-  assigned <<- names(glmQL_res)[x]
-  return(assigned)
-}
-# function to use in other functions to return contrasts without assigning contrast globally
-.wcontrast <- function(x = 404){
-  x<-as.integer(x)
-  num_c <- dim(contrasts_list)[2]
-  message <- paste("Please enter a number between 1 to",num_c,"to choose your contrast. Below are the contrast options:\n")
-  for (j in 0:3){  # Iterate over the 4 lines
-    for (i in seq(1 + j, num_c, by = 4)){  # Print contrasts separated by 4
-      message <- paste0(message, i, " - ", colnames(contrasts_list)[i], "\t")
-    }
-    message <- paste0(message, "\n")
-  }
-  while ( x > num_c | x < 1 | is.na(x)){
-    cat(message)
-    x<- as.integer(readline())
-  }
-  assigned <- colnames(contrasts_list)[x]
-  return(assigned)
-}
-# function to get all transcript IDs associated with entered gene ID (ens,ext,entrez)
-.ID_to_trans <- function(x="404"){
-  looking <- t2ged[t2ged$target_id %in% "empty",]
-  # looping until the entry is found in t2ged
-  while(dim(looking)[1]==0){
-    # separating IDs if a list was given
-    if (grepl("/",x)|grepl(" ",x)){
-      try(x <- strsplit(x, "/"))
-      try(x <- strsplit(x, " "))
-      x <- unlist(x)
-    }
-    if (grepl("FBgn",x[[1]],fixed = TRUE)){
-      looking <- t2ged[t2ged$ens_gene %in% x,]
-      
-    } else if (x[[1]] %in% t2ged$entrez_gene){              
-      looking <- t2ged[t2ged$entrez_gene %in% x,]
-      
-    } else if (x[[1]] %in% t2ged$ext_gene){
-      looking <- t2ged[t2ged$ext_gene %in% x,]
-    } else {
-      cat("Please enter gene ID in the form of flybase gene ID (Fbgnxxx), gene symbol (e.g. pug), or entrezID (numbers):")
-      x<- readline()
-    }
-  }
-  return(looking)
-}
-# function to retrieve the average logCPM of a list of input transcripts.
-gavlogCPM <- function(){
-  # retrieving list of transcript IDs with associated gene symbol
-  IDs <- .ID_to_trans()
-  buffer <- readline("buffer. Just press enter if required.")
-  # getting contrast to extract sample groups from
-  contrast <- .wcontrast()
-  # getting sample groups from contrasts matrix
-  sample_groups <- contrasts_list[,contrast]
-  sample_groups <- names(sample_groups[sample_groups!=0])
-  # getting avlogCPM values for the selected transcripts and sample groups
-  # if statement to check if I'm working with transcript-level or gene-level information
-  if (dim(glmQL_decided[[1]])[1]==17215){
-    avlogCPM_vals <- avlogCPM[IDs$ens_gene,sample_groups]
-    # renaming rows to include the gene symbol in them
-    rownames(avlogCPM_vals) <- paste0(IDs$ens_gene," (",IDs$ext_gene,")")
-  }else{
-    avlogCPM_vals <- avlogCPM[IDs$target_id,sample_groups]
-    # renaming rows to include the gene symbol in them
-    rownames(avlogCPM_vals) <- paste0(IDs$target_id," (",IDs$ext_gene,")")
-  }
-  # removing NA rows which come from transcript IDs pulled out of t2ged that did not pass the filtering steps. These transcripts don't exist in y so they don't exist in logCPM
-  avlogCPM_vals <- avlogCPM_vals[!is.na(avlogCPM_vals[,1]),]
-  View(avlogCPM_vals)
-  avlogCPM_vals <<- avlogCPM_vals
-}
-
-# Function finds given gene entries in t2ged, saves the list globally and opens it to view. you can enter one ID or multiple IDs separated by a "/"
-hunt <- function(x = "geneID"){
-  looking <- t2ged[t2ged$target_id %in% "empty",]
-  # looping until the entry is found in t2ged
-  while(dim(looking)[1]==0){
-    # separating IDs if a list was given
-    if(length(x)==1){
-      if(grepl("/",x)|grepl(" ",x)){
-        try(x <- strsplit(x, "/"))
-        try(x <- strsplit(x, " "))
-        x <- unlist(x)
-      }
-    }
-    if (grepl("FBtr",x[[1]],fixed = TRUE)){
-      looking <- t2ged[t2ged$target_id %in% x,]
-      found <<- t2ged[t2ged$target_id %in% x,]
-    } else if (grepl("FBgn",x[[1]],fixed = TRUE)){
-      looking <- t2ged[t2ged$ens_gene %in% x,]
-      found <<- t2ged[t2ged$ens_gene %in% x,]
-    } else if (x[[1]] %in% t2ged$entrez_gene){              
-      looking <- t2ged[t2ged$entrez_gene %in% x,]
-      found <<- t2ged[t2ged$entrez_gene %in% x,]
-    } else if (x[[1]] %in% t2ged$ext_gene){
-      looking <- t2ged[t2ged$ext_gene %in% x,]
-      found <<- t2ged[t2ged$ext_gene %in% x,]
-    } else {
-      cat("Please enter either a gene ID in the form of transcript id (FBtrxx), flybase gene ID (Fbgnxxx), gene symbol (e.g. pug), or entrezID (numbers):")
-      x<- readline()
-    }
-  }
-  
-  # found<<-found[!duplicated(found$ens_gene),]
-  # I want to add to the found object a 5th column with information on its expression in the currently assigned contrast, i.e. logFC and FDR for the contrast
-  # running which contrast function if not already done
-  if (!exists("assigned")){
-    .wcontrast()
-  }
-  # getting contrast values for each gene
-  temp_table <<- glmQL_decided[[assigned]]$table[glmQL_decided[[assigned]]$table$target_id %in% found$target_id,]
-
-  
-  # reordering the table to follow found's order, so values are correctly assigned
-  # temp_table<<-temp_table[order(factor(temp_table, levels = found$ens_gene)),]
-  View(temp_table)
-  # # adding 5th column with logFC value for assigned contrast
-  # found[[paste0("logFC in ",assigned)]] <- temp_table$logFC
-  # # adding 6th column with logCPM for assigned contrast
-  # found[[paste0("logCPM in ",assigned)]] <- temp_table$logCPM
-  # # adding 7th column with FDR for assigned contrast
-  # found[[paste0("FDR in ",assigned)]] <- temp_table$FDR
-  found <<- temp_table[!duplicated(temp_table$ens_gene),]
-  View(found)
-  
-}
-
-.jhunt <- function(x="404", contrast = NULL){
-  # retrieving list of transcript IDs with associated gene symbol
-  if(x=="404"){
-    IDs <- .ID_to_trans()
-  }else{IDs <- .ID_to_trans(x)}
-  # buffer <- readline("buffer. Just press enter if required.")
-  # getting contrast to extract sample groups from
-  contrast <- .wcontrast(contrast)
-  # getting sample groups from contrasts matrix
-  sample_groups <- contrasts_list[,contrast]
-  sample_groups <- names(sample_groups[sample_groups!=0])
-  # getting avlogCPM values for the selected transcripts and sample groups
-  # if statement to check if I'm working with transcript-level or gene-level information
-  if (dim(glmQL_decided[[1]])[1]==17215){
-    avlogCPM_vals <- avlogCPM[IDs$ens_gene,sample_groups]
-  }else{
-    avlogCPM_vals <- avlogCPM[IDs$target_id,sample_groups]
-  }
-  # removing NA rows which come from transcript IDs pulled out of t2ged that did not pass the filtering steps. These transcripts don't exist in y so they don't exist in logCPM
-  avlogCPM_vals <- avlogCPM_vals[!is.na(avlogCPM_vals[,1]),]
-  
-  DGEvals <-.hunt(IDs$ens_gene, contrast = contrast)
-  DGEvals[,6:8] <- list(NULL)
-  newtable <- merge(DGEvals, avlogCPM_vals, by=0)
-  newtable[,1] <- NULL
-  return(newtable)
-}
-
-jhunt <- function(x="404"){
-  # retrieving list of transcript IDs with associated gene symbol
-  if(x=="404"){
-    IDs <- .ID_to_trans()
-  }else{IDs <- .ID_to_trans(x)}
-  buffer <- readline("buffer. Just press enter if required.")
-  # getting contrast to extract sample groups from
-  contrast <- .wcontrast()
-  # getting sample groups from contrasts matrix
-  sample_groups <- contrasts_list[,contrast]
-  sample_groups <- names(sample_groups[sample_groups!=0])
-  # getting avlogCPM values for the selected transcripts and sample groups
-  # if statement to check if I'm working with transcript-level or gene-level information
-  if (dim(glmQL_decided[[1]])[1]==17215){
-    avlogCPM_vals <- avlogCPM[IDs$ens_gene,sample_groups]
-  }else{
-    avlogCPM_vals <- avlogCPM[IDs$target_id,sample_groups]
-  }
-  # removing NA rows which come from transcript IDs pulled out of t2ged that did not pass the filtering steps. These transcripts don't exist in y so they don't exist in logCPM
-  avlogCPM_vals <- avlogCPM_vals[!is.na(avlogCPM_vals[,1]),]
-  
-  DGEvals <-.hunt(IDs$ens_gene, contrast = contrast)
-  DGEvals[,6:8] <- list(NULL)
-  newtable <- merge(DGEvals, avlogCPM_vals, by=0)
-  newtable[,1] <- NULL
-  View(newtable)
-}
-```
-
 # Over-representation analysis
 
 ```{r ORA - Preparing DE transcript vector, include=FALSE}
-
-# loop to decide what DEA list to use
-while (!exists("DEA_res")){
-  cat("1: glmQL_res \n2: Treat_res\n")
-  u <- as.integer(readline())
-  if(u==1){
-    DEA_res <- glmQL_res
-  }else if(u==2){
-    DEA_res <- Treat_res
-  }
-}
-# following loop gets vector of DE transcripts in two lists, either of FBtr/FBgn IDs or of KEGG IDs (ncbi-geneids)
+# following loop gets vector of DE genes in two lists, either of FBgn IDs or of KEGG IDs (ncbi-geneids)
 DET_vecs <- list()
 DET_vecs_K <- list()
-for (i in 1:length(DEA_res)){
-  name <- names(DEA_res)[i]
+for (i in 1:length(QL_decided)){
+  name <- names(QL_decided)[i]
   # extract pre-specified (n) number of transcripts, here taking every transcript which went through DE analysis. Selection of DE transcripts is done a bit further down.
-  DE_results_edgeR <- topTags(DEA_res[[name]], n = nrow(DEA_res[[name]]))
+  DE_results_edgeR <- QL_decided[[i]]
   # first, we transform the results table to a data frame so that we see the results
   # table directly when accessing it through the name "res"
   DE_results_edgeR <- as.data.frame(DE_results_edgeR)
@@ -379,19 +93,11 @@ for (i in 1:length(DEA_res)){
   # using this indicator, we extract the vector of differentially expressed genes 
   # from the results of differential expression analysis
   DE_df <- DE_results_edgeR[ind_differentially_expressed,]
-  # Retrieving list of transcript IDs for DE transcripts of this contrast
-  DET_vecs[[name]] <- DE_df$TranscriptID
-  # if statement for when using tximport method
-  if (length(DET_vecs[[name]])==0){
-    DET_vecs[[name]] <- DE_df$ens_gene
-  }
+  # Retrieving list of gene IDs for DE transcripts of this contrast
+  DET_vecs[[name]] <- DE_df$ens_gene
   # making DE transcripts vector for KEGG analysis, removing genes without 
-  # ENTREZ ID (==ncbi-geneid) since they won't be usable for KEGG ORA
-  DET_vecs_K[[name]] <- DE_df$ENTREZID[!is.na(DE_df$ENTREZID)]
-  # if statement for when using tximport method
-  if (length(DET_vecs_K[[name]])==0){
-    DET_vecs_K[[name]] <- DE_df$entrez_gene[!is.na(DE_df$entrez_gene)]
-  }
+  # ENTREZ ID (==ncbi-geneid) since they won't be usable for KEGG enrichment analysis
+  DET_vecs_K[[name]] <- DE_df$entrez_gene[!is.na(DE_df$entrez_gene)]
 }
 ```
 
@@ -405,7 +111,7 @@ for (i in 1:length(DET_vecs)){
                            OrgDb = org.Dm.eg.db,
                            keyType = "ENSEMBL", # ftbrXXXX
                            ont = "all",
-                           # readable = TRUE,   # translates transcript ids to symbol.
+                           # readable = TRUE,   # translates gene ID into gene symbol.
                            minGSSize = 10,       # default is 10. 
                            maxGSSize = 800,
                            # pAdjustMethod = "none"
@@ -415,24 +121,21 @@ for (i in 1:length(DET_vecs)){
                                  organism = "dme",
                                  keyType = "ncbi-geneid", #ENTREZID, numbers.
                                  minGSSize = 10)
-  print(i)
+  print(name)
 }
-if (u==1){
-  saveRDS(ORA_results_GO, file = paste0(Robjectsdir, "/ORA_results_GO_glmQL-txi.rds"))
-  saveRDS(ORA_results_K, file = paste0(Robjectsdir, "/ORA_results_K_glmQL-txi.rds"))
-}else if(u==2){
-  saveRDS(ORA_results_GO, file = paste0(Robjectsdir, "/ORA_results_GO_Treat-txi.rds"))
-  saveRDS(ORA_results_K, file = paste0(Robjectsdir, "/ORA_results_K_Treat-txi.rds"))
-}
+
+saveRDS(ORA_results_GO, file = paste0(Robjectsdir, "/ORA_results_GO_glmQL-txi.rds"))
+saveRDS(ORA_results_K, file = paste0(Robjectsdir, "/ORA_results_K_glmQL-txi.rds"))
 ```
 
 
 
 ```{r ORA - Running analysis single, include=FALSE}
-# call "wcontrast()" function to assign assigned
-ORA_results_GO[[assigned]] <- enrichGO(gene = DET_vecs[[assigned]],
+# call "wcontrast()" function to assign the contrast to analyse for
+name <- wcontrast()
+ORA_results_GO[[name]] <- enrichGO(gene = DET_vecs[[name]],
                          OrgDb = org.Dm.eg.db,
-                         keyType = "FLYBASE", # ftbrXXXX
+                         keyType = "ENSEMBL", # FBgnxxx
                          ont = "all",
                          # readable = TRUE,   # translates transcript ids to symbol.
                          minGSSize = 10,       # default is 10. 
@@ -446,21 +149,22 @@ ORA_results_K[[assigned]] <- enrichKEGG(gene = DET_vecs_K[[assigned]],
 
 # head(ORA_results_GO, 20)
 # head(ORA_results_K, 20)
-ORA_GO_CC <-ORA_results_GO[[assigned]][ORA_results_GO[[assigned]]@result[["ONTOLOGY"]]=="CC"]
-ORA_GO_MF<-ORA_results_GO[[assigned]][ORA_results_GO[[assigned]]@result[["ONTOLOGY"]]=="MF"]
+# ORA_GO_CC <-ORA_results_GO[[assigned]][ORA_results_GO[[assigned]]@result[["ONTOLOGY"]]=="CC"]
+# ORA_GO_MF<-ORA_results_GO[[assigned]][ORA_results_GO[[assigned]]@result[["ONTOLOGY"]]=="MF"]
 ```
-
-
 
 # Geneset enrichment analysis
 ```{r GSEA - ranking}
+# modify ranking method if desired. 
+#1 - ranking by log(FC); 
+#2 - ranking by (-)log10(p-value)*sign[log(FC)]
 rankvecs <- list()
 rankvecs_k <- list()
 ranking_method="1"
-for (i in 1:length(DEA_res)){
+for (i in 1:length(QL_decided)){
   # extract pre-specified (n) number of transcripts, here taking every transcript which went through DE analysis, since I'm doing GSEA and looking at the whole set of genes in the contrast
-  DE_results_edgeR_ENSEMBLTRANS <- topTags(DEA_res[[i]], n = nrow(DEA_res[[i]]))
-  name <- names(DEA_res)[i]
+  DE_results_edgeR_ENSEMBLTRANS <- QL_decided[[i]]
+  name <- names(QL_decided)[i]
   # first, we transform the results table to a data frame so that we see the results
   # table directly when accessing it through the name "res"
   DE_results_edgeR_ENSEMBLTRANS <- as.data.frame(DE_results_edgeR_ENSEMBLTRANS)
@@ -468,11 +172,7 @@ for (i in 1:length(DEA_res)){
   DE_results_edgeR_ENSEMBLTRANS <- dplyr::rename(DE_results_edgeR_ENSEMBLTRANS, 
                                            p_adj = FDR)
   # create vector that contains the value of the gene-level ranking metric for each gene. 
-  # using LogFC here directly instead of through adjusted pval, simply because for contrasts of interest a majority of transcripts that were tested for DE have pval=1, leading to identical rank.
-  # (currently) foolproof method to ensure user entry is 1 or 2
-  # while (ranking_method!="1"& ranking_method!="2") {
-  #   ranking_method <- readline("1 for logfc, 2 for -log(pval)*sign(logfc):")
-  # }
+  # using LogFC here directly instead of through adjusted pval, simply because for contrasts of interest a majority of transcripts that were tested for DE have pval=1, leading to identical rank for a majority of genes which messes up the GSEA calculations for all genes (including those with significant p-values). Since GSEA method requires further checking of the significance and strength of DE for the genes in significantly enriched terms/pathways, and is really about understanding if there's a trend towards similar expression changes for genes in a term/pathway, this method is acceptable.
   if (ranking_method=="1"){
     rankvec_edgeR_ENSEMBLTRANS <- setNames(DE_results_edgeR_ENSEMBLTRANS$logFC,
                                            rownames(DE_results_edgeR_ENSEMBLTRANS))
@@ -484,19 +184,11 @@ for (i in 1:length(DEA_res)){
   }
   # making vector for KEGG analysis
   rankvec_edgeR_Entrez <- rankvec_edgeR_ENSEMBLTRANS
-
-  
-  
   # assigning ENTREZID to separate vector for KEGG analysis
-  names(rankvec_edgeR_Entrez) <- DE_results_edgeR_ENSEMBLTRANS$ENTREZID
-  # if statement for when tximport method is used
-  if (is.null(names(rankvec_edgeR_Entrez))){
-    names(rankvec_edgeR_Entrez) <- DE_results_edgeR_ENSEMBLTRANS$entrez_gene
-  }
-  # sort the vectors in descending order
+  names(rankvec_edgeR_Entrez) <- DE_results_edgeR_ENSEMBLTRANS$entrez_gene
+  # sorting the vectors in descending order
   rankvec_edgeR_ENSEMBLTRANS <- sort(rankvec_edgeR_ENSEMBLTRANS, decreasing=TRUE)
   rankvec_edgeR_Entrez <- sort(rankvec_edgeR_Entrez, decreasing=TRUE)
-  
   rankvecs[[name]] <- rankvec_edgeR_ENSEMBLTRANS
   rankvecs_k[[name]] <- rankvec_edgeR_Entrez
 }
@@ -510,11 +202,11 @@ gsekegg_res <- list()
 # looping over every ranking vector to run GSEA for all contrasts
 
 for (i in 1:length(rankvecs)){
-  name <- names(DEA_res)[i]
+  name <- names(QL_res)[i]
   gsego_res[[name]] <- gseGO(geneList = rankvecs[[name]],
                      ont = "ALL",
                      OrgDb = org.Dm.eg.db,
-                     keyType = "FLYBASE",
+                     keyType = "ENSEMBL",
                      minGSSize = 5,
                      eps = 0, 
                      seed = TRUE) # set seed for reproducibility
@@ -531,15 +223,7 @@ for (i in 1:length(rankvecs)){
                      )
 }
 
-
-if (u==1){
-  saveRDS(gsego_res, file = paste0(Robjectsdir, "/GSEA_results_GO_glmQL-txi.rds"))
-  saveRDS(gsekegg_res, file = paste0(Robjectsdir, "/GSEA_results_K_glmQL-txi.rds"))
-}else if(u==2){
-  saveRDS(gsego_res, file = paste0(Robjectsdir, "/GSEA_results_GO_Treat-txi.rds"))
-  saveRDS(gsekegg_res, file = paste0(Robjectsdir, "/GSEA_results_K_Treat-txi.rds"))
-}
-
-
+saveRDS(gsego_res, file = paste0(Robjectsdir, "/GSEA_results_GO_glmQL-txi.rds"))
+saveRDS(gsekegg_res, file = paste0(Robjectsdir, "/GSEA_results_K_glmQL-txi.rds"))
 ```
 
