@@ -9,6 +9,11 @@ output: html_document
 ### Directories needed for this file
 rootdir <- getwd()
 Robjectsdir <- paste0(rootdir, "/Robjects")
+Graphsdir<- paste0(rootdir, "/graphs")
+if (!dir.exists(file.path(Graphsdir, "BioVar"))) {
+  dir.create(file.path(Graphsdir, "BioVar"))
+}
+
 BVdir <- paste0(Graphsdir, "/BioVar")
 
 #setting root directory

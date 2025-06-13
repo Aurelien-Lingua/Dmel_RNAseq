@@ -30,12 +30,6 @@ if (!dir.exists(file.path(rootdir, "graphs"))) {
   dir.create(file.path(rootdir, "graphs"))
 }
 Graphsdir <- paste0(rootdir, "/graphs")
-# make biovariation graph folder
-if (!dir.exists(file.path(Graphsdir, "BioVar"))) {
-  dir.create(file.path(Graphsdir, "BioVar"))
-}
-# Saving directory names for use in scripts
-BVdir <- paste0(Graphsdir, "/BioVar")
 
 ### ENTER PATH WITH KALLISTO FOLDERS BELOW
 datapath <- "C://Users/Aurelien/OneDrive - Queen Mary, University of London/Documents/Experimental data analysis/Dmel_RNAseq/input"
