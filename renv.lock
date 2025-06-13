@@ -467,6 +467,20 @@
       "Maintainer": "Kirill Müller <kirill@cynkra.com>",
       "Repository": "https://packagemanager.posit.co/cran/latest"
     },
+    "DGEsurf": {
+      "Package": "DGEsurf",
+      "Version": "0.1.1",
+      "Source": "unknown",
+      "Type": "Package",
+      "Title": "Quick Functions To Probe EdgeR RNAseq Data",
+      "Authors@R": "c( person( \"Aurelien\", \"Lingua\", email = \"a.a.a.lingua@qmul.ac.uk\", role = c(\"aut\", \"cre\") ) )",
+      "Description": "Includes a few functions to probe through a list of TopTag objects, retrieving and displaying data on differential expression of selected genes through one of their identifiers.",
+      "License": "GPL-2",
+      "Encoding": "UTF-8",
+      "LazyData": "true",
+      "Author": "Aurelien Lingua [aut, cre]",
+      "Maintainer": "Aurelien Lingua <a.a.a.lingua@qmul.ac.uk>"
+    },
     "DOSE": {
       "Package": "DOSE",
       "Version": "3.30.5",
