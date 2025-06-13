@@ -222,7 +222,6 @@ saveRDS(contrasts, file = paste0(Robjectsdir, "/contrasts.rds"))
 #####
 #> To change:
 #> - modify assignment of group_names to match data at hand
-#> - modify number of samples to average over (i.e. number of samples per condition) in avlogCPM calculation
 #> 
 #> The logCPM values are important for visual representation of transcript expression, while avlogCPM gives the average of each transcript's logCPM values over all the biological repeats in the same condition. The values from avlogCPM are used in functions (initialized in DE graphs and later scripts) to output tabled expression and fold-change information of a user-chosen transcript or set of transcripts.
 #####
@@ -230,12 +229,13 @@ saveRDS(contrasts, file = paste0(Robjectsdir, "/contrasts.rds"))
 ## converting counts to log2 counts per million into new matrix with sample names as column titles and transcript names as row titles
 logCPM <- cpm(y, prior.count=2, log=TRUE) # prior.count is avg count to be added to each observation to not take the log of zero. default is 2
 # building log2cpm with row names as associated gene names and column names as sample names
-rownames(logCPM) <- y$genes[["ens_gene"]] # this is where wrong ordering of the t2ged/annot table becomes apparent
+rownames(logCPM) <- y$genes[["ext_gene"]] # this is where wrong ordering of the t2ged/annot table becomes apparent
 colnames(logCPM) <- s2c$sample
 saveRDS(logCPM, file = paste0(Robjectsdir, "/logCPM.rds"))
 # retrieving group names from contrasts matrix and reordering to match logCPM column name order
 group_names <- rev(rownames(contrasts)) # contrast names bc I can then use contrast to search in avlogCPM
-group_names <- group_names[c(1,2,3,4,5)] # reordering to match logCPM order
+group_names <- group_names[c(1,2,7,8,3,4,9,10,5,6,11,12)]# reordering to match logCPM order
+# group_names <- group_names[c(1,2,3,4,5)] 
 # seq iterates i from 1 to 48 by 4. lapply takes i and applies rowMeans over i:i+4,
 # meaning that rowMeans calculates the mean of each row using the 4 values in the range i:i+3
 avlogCPM <- as.data.frame(lapply(seq(1, dim(logCPM)[2], by = 5), function(i) {
