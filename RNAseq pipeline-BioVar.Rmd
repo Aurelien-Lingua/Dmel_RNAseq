@@ -13,7 +13,6 @@ Graphsdir<- paste0(rootdir, "/graphs")
 if (!dir.exists(file.path(Graphsdir, "BioVar"))) {
   dir.create(file.path(Graphsdir, "BioVar"))
 }
-
 BVdir <- paste0(Graphsdir, "/BioVar")
 
 #setting root directory
@@ -38,13 +37,8 @@ if (!exists("s2c")){
   s2c <- readRDS(file = paste0(Robjectsdir, "/s2c.rds"))
   design <- s2c$design
 }
-if (!exists("logCPM")){
-  logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
-  avlogCPM <- readRDS(file = paste0(Robjectsdir, "/avlogCPM.rds"))
-}
-if (!exists("contrasts")){
-  contrasts <- readRDS(file = paste0(Robjectsdir, "/contrasts.rds"))
-}
+
+
 ```
 
 ### Making MDS plots, heatmap(s), and BCV plots to ensure biological variation is fine

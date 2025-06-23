@@ -35,9 +35,6 @@ if (!exists("s2c")){
 if (!exists("t2g")){
   t2g <- readRDS(file = paste0(Robjectsdir, "/t2g_dmel.rds"))
 }
-if (!exists("t2g")){
-  t2g <- readRDS(file = paste0(Robjectsdir, "/t2g_dmel.rds"))
-}
 if (!exists("logCPM")){
   logCPM <- readRDS(file = paste0(Robjectsdir, "/logCPM.rds"))
 }

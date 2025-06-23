@@ -52,7 +52,6 @@ if (!exists("y")){
     t2ged<-t2ged[order(factor(t2ged$target_id,levels = rownames(cts.scaled)))]
   }
 }
-
 if (!exists("glmQL_res")){
   glmQL_res <- readRDS(file = paste0(Robjectsdir, "/glmQL_res_txi.rds"))
   glmQL_decided <- readRDS(file = paste0(Robjectsdir, "/glmQL_decided_txi.rds"))
