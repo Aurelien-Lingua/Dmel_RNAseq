@@ -44,7 +44,6 @@ suppressMessages({
   library(ggrepel)  # for labelling stuff - volcano plots
   # library(tidyverse) # includes ggplot2, for data visualisation. dplyr, for data manipulation.
   library(RColorBrewer) # for a colourful plot
-  library(DGEsurf)  # bespoke functions to probe in code
 })
 ```
 

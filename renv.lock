@@ -467,20 +467,6 @@
       "Maintainer": "Kirill Müller <kirill@cynkra.com>",
       "Repository": "https://packagemanager.posit.co/cran/latest"
     },
-    "DGEsurf": {
-      "Package": "DGEsurf",
-      "Version": "0.1.1",
-      "Source": "unknown",
-      "Type": "Package",
-      "Title": "Quick Functions To Probe EdgeR RNAseq Data",
-      "Authors@R": "c( person( \"Aurelien\", \"Lingua\", email = \"a.a.a.lingua@qmul.ac.uk\", role = c(\"aut\", \"cre\") ) )",
-      "Description": "Includes a few functions to probe through a list of TopTag objects, retrieving and displaying data on differential expression of selected genes through one of their identifiers.",
-      "License": "GPL-2",
-      "Encoding": "UTF-8",
-      "LazyData": "true",
-      "Author": "Aurelien Lingua [aut, cre]",
-      "Maintainer": "Aurelien Lingua <a.a.a.lingua@qmul.ac.uk>"
-    },
     "DOSE": {
       "Package": "DOSE",
       "Version": "3.30.5",
@@ -3618,48 +3604,6 @@
       "NeedsCompilation": "no",
       "Author": "Richard Iannone [aut, cre] (<https://orcid.org/0000-0003-3925-190X>), Christophe Dervieux [ctb] (<https://orcid.org/0000-0003-4474-2498>), Winston Chang [ctb], Dave Gandy [ctb, cph] (Font-Awesome font), Posit Software, PBC [cph, fnd]",
       "Maintainer": "Richard Iannone <rich@posit.co>",
-      "Repository": "https://packagemanager.posit.co/cran/latest"
-    },
-    "forcats": {
-      "Package": "forcats",
-      "Version": "1.0.0",
-      "Source": "Repository",
-      "Title": "Tools for Working with Categorical Variables (Factors)",
-      "Authors@R": "c( person(\"Hadley\", \"Wickham\", , \"hadley@rstudio.com\", role = c(\"aut\", \"cre\")), person(\"RStudio\", role = c(\"cph\", \"fnd\")) )",
-      "Description": "Helpers for reordering factor levels (including moving specified levels to front, ordering by first appearance, reversing, and randomly shuffling), and tools for modifying factor levels (including collapsing rare levels into other, 'anonymising', and manually 'recoding').",
-      "License": "MIT + file LICENSE",
-      "URL": "https://forcats.tidyverse.org/, https://github.com/tidyverse/forcats",
-      "BugReports": "https://github.com/tidyverse/forcats/issues",
-      "Depends": [
-        "R (>= 3.4)"
-      ],
-      "Imports": [
-        "cli (>= 3.4.0)",
-        "glue",
-        "lifecycle",
-        "magrittr",
-        "rlang (>= 1.0.0)",
-        "tibble"
-      ],
-      "Suggests": [
-        "covr",
-        "dplyr",
-        "ggplot2",
-        "knitr",
-        "readr",
-        "rmarkdown",
-        "testthat (>= 3.0.0)",
-        "withr"
-      ],
-      "VignetteBuilder": "knitr",
-      "Config/Needs/website": "tidyverse/tidytemplate",
-      "Config/testthat/edition": "3",
-      "Encoding": "UTF-8",
-      "LazyData": "true",
-      "RoxygenNote": "7.2.3",
-      "NeedsCompilation": "no",
-      "Author": "Hadley Wickham [aut, cre], RStudio [cph, fnd]",
-      "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
       "Repository": "https://packagemanager.posit.co/cran/latest"
     },
     "formatR": {
